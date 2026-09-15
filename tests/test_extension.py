@@ -340,7 +340,9 @@ def test_sampler_records_snapshots_with_time_and_stack():
     times = [t for t, _ in sampler.snapshots]
     assert times == sorted(times)
     inside = [(t, s) for t, s in sampler.snapshots if t0 <= t <= t1]
-    assert len(inside) >= 10
+    # the sampler only gets the GIL every 5ms (16ms on Windows), more on a loaded
+    # machine, so only ask for a few samples
+    assert len(inside) >= 3
     functions = {
         sampler.functions[i]["function"] for _, s in inside for i in sampler.stacks[s]
     }
@@ -370,7 +372,7 @@ def test_sampler_keeps_sampling_inside_emissions(app):
         for t, s in sampler.snapshots
         if call.start <= t <= call.start + call.duration
     ]
-    assert len(during) >= 10
+    assert len(during) >= 3  # see test_sampler_records_snapshots_with_time_and_stack
     assert {sampler.functions[stack[0]]["function"] for stack in during} == {
         "busy_wait"
     }
