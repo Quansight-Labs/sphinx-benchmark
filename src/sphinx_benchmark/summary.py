@@ -7,9 +7,10 @@ outputs can never disagree about the numbers.
 
 from __future__ import annotations
 
+import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-import json
+from itertools import pairwise
 
 
 class BenchmarkFileError(Exception):
@@ -298,7 +299,7 @@ def compute_summary(data: dict) -> BuildSummary:
     )
     gap_acc: dict[tuple[str, str], tuple[float, int]] = {}
     overlaps = 0
-    for (prev_start, prev_duration, prev_name), (start, _, name) in zip(top, top[1:]):
+    for (prev_start, prev_duration, prev_name), (start, _, name) in pairwise(top):
         gap = start - (prev_start + prev_duration)
         if gap < 0:
             overlaps += 1  # top-level emissions can't overlap; flags a bug
@@ -433,7 +434,7 @@ def all_gap_occurrence_details(
         if e["depth"] == 0 and e["duration"] is not None
     )
     grouped: dict[tuple[str, str], list[GapOccurrence]] = defaultdict(list)
-    for (p_start, p_dur, p_name, p_call), (start, _, name, call) in zip(top, top[1:]):
+    for (p_start, p_dur, p_name, p_call), (start, _, name, call) in pairwise(top):
         gap_start = p_start + p_dur
         if start < gap_start:
             continue

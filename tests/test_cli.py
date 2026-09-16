@@ -1,9 +1,10 @@
 import json
 import os
+
 import pytest
+
 from sphinx_benchmark.cli import main
 from sphinx_benchmark.summary import compute_summary
-
 
 SAMPLE = {
     "project_info": {
