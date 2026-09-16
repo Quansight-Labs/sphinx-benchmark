@@ -2,14 +2,16 @@ import json
 import re
 import time
 import types
+
 import pytest
 from sphinx.application import Sphinx
 from sphinx.events import EventListener
 from sphinx.extension import Extension
+
 import sphinx_benchmark.extension as bs
 from sphinx_benchmark.extension import (
-    EventLogger,
     _WRAP_FLAG,
+    EventLogger,
     recorder,
     wrap_all_listeners,
     wrap_connect,

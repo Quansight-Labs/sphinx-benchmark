@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from datetime import datetime, timezone
 from collections import Counter
-from dataclasses import dataclass, asdict
-from time import perf_counter
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from functools import wraps
-from sphinx.application import Sphinx
 from importlib.metadata import entry_points
+from time import perf_counter
+
+from sphinx.application import Sphinx
 from sphinx.util.logging import getLogger
 
 logger = getLogger(__name__)
@@ -158,7 +159,7 @@ class EventLogger:
         self.call_counts = Counter()
         self.event_call_counts = Counter()
         self.start_time = perf_counter()
-        self.start_ts = datetime.now(timezone.utc)
+        self.start_ts = datetime.now(UTC)
         self._stack = []
         self._next_event_id = 0
 
