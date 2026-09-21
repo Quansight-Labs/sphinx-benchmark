@@ -626,6 +626,12 @@ def wrap_emit(app: Sphinx, *_args) -> None:
     app.events.emit = wrapped
 
 
+# (function, module) of the wrapper frames; summary.py uses them to find
+# where a handler's or an event emission's call tree starts in a sampled stack
+LISTENER_WRAPPER = (f"{wrap_listener.__qualname__}.<locals>.wrapped", __name__)
+EMIT_WRAPPER = (f"{wrap_emit.__qualname__}.<locals>.wrapped", __name__)
+
+
 def build_finished(app: Sphinx, exception) -> None:
     """Write the collected benchmarks and print the summary at the end of the build.
 

@@ -379,12 +379,11 @@ def test_sampler_keeps_sampling_inside_emissions(app):
     # the wrapper the extension put around the handler is on those stacks, so
     # the summary can cut them down to the part inside the handler
     wrappers = {
-        sampler.functions[i]["function"]
+        (sampler.functions[i]["function"], sampler.functions[i]["module"])
         for stack in during
         for i in stack
-        if sampler.functions[i]["module"] == "sphinx_benchmark.extension"
     }
-    assert wrappers >= {"wrap_listener.<locals>.wrapped", "wrap_emit.<locals>.wrapped"}
+    assert wrappers >= {bs.LISTENER_WRAPPER, bs.EMIT_WRAPPER}
 
 
 def test_records_dumps_functions_stacks_and_snapshots(app, log, monkeypatch):

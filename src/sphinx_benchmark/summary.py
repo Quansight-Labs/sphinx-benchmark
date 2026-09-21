@@ -14,6 +14,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from itertools import pairwise
 
+from .extension import EMIT_WRAPPER, LISTENER_WRAPPER
+
 
 class BenchmarkFileError(Exception):
     """Raised when the benchmarks JSON cannot be read or parsed."""
@@ -595,12 +597,6 @@ def gap_occurrence_details(
 
 # --------------------------------------------------------------- profile --
 
-#: The wrappers the extension puts around every handler and around
-#: ``EventManager.emit`` (function qualname, module), used to cut a sampled
-#: stack down to the part inside a handler call or an emission.
-_LISTENER_WRAPPER = ("wrap_listener.<locals>.wrapped", "sphinx_benchmark.extension")
-_EMIT_WRAPPER = ("wrap_emit.<locals>.wrapped", "sphinx_benchmark.extension")
-
 
 def load_frames(data: dict) -> Frames | None:
     """Read the ``"frames"`` of the JSON and locate every snapshot in time
@@ -705,7 +701,7 @@ def _under_handler(
     if that wrapper is not on it.
     """
     for i in range(1, len(stack)):
-        if _is_wrapper(functions, stack[i], _LISTENER_WRAPPER):
+        if _is_wrapper(functions, stack[i], LISTENER_WRAPPER):
             f = functions[stack[i - 1]]
             if f["function"] == handler and f["module"] == module:
                 return stack[:i]
@@ -717,7 +713,7 @@ def _under_emit(stack: tuple[int, ...], functions: list[dict]) -> tuple[int, ...
     ``EventManager.emit`` down). The whole stack if no emission is on it.
     """
     for i in range(1, len(stack)):
-        if _is_wrapper(functions, stack[i], _EMIT_WRAPPER):
+        if _is_wrapper(functions, stack[i], EMIT_WRAPPER):
             return stack[:i]
     return stack
 
