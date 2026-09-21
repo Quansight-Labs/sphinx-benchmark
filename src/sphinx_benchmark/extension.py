@@ -41,7 +41,7 @@ class HandlerCall:
         Full module path (separated by '.') of where the handler function is defined.
     kind : str
         Classification of where the handler is coming from. Could be:
-        ``"extension"``, ``"sphinx-internal"``, ``"theme"``, or
+        ``"extension"``, ``"sphinx-internal"``, ``"theme"``, ``"stdlib"`` or
         ``"unknown"``.
     extension : str or None
         Origin package of the handler: extension name for
@@ -281,7 +281,7 @@ class EventLogger:
         ``"events"`` is a list of the recorded :class:`Event` entries (as
         plain dicts, via :func:`dataclasses.asdict`), one per event emission.
 
-        ``"frames"`` is the stack of snapshots of the whole build, see
+        ``"frames"`` is the stack of snapshots/samples of the whole docs build, see
         :meth:`StackSampler.records`.
         """
         with open(filename, "w", encoding="utf-8") as f:
@@ -325,20 +325,18 @@ def classify_module(module: str, app: Sphinx) -> tuple[str, str | None]:
 
 
 class StackSampler(threading.Thread):
-    """A background daemon thread that takes snapshots of the build thread's call stack.
-
-    Every ``interval`` seconds it looks at what the build thread is
-    executing (via :func:`sys._current_frames`) and records the stack of
-    function calls and when it was taken.
+    """A background daemon thread that records the docs build thread's
+    function call stack (via :func:`sys._current_frames`) every ``interval``
+    seconds.
 
     Parameters
     ----------
     recorder : EventLogger
         The `EventLogger` instance of the docs build.
     interval : float
-        Seconds to sleep between two samples.
-    thread_id : int
-        ``threading.get_ident()`` of the thread running the build.
+        Seconds to sleep between collecting two function stack samples.
+    build_thread_id : int
+        ``threading.get_ident()`` of the thread running the docs build.
 
     Attributes
     ----------
@@ -346,50 +344,53 @@ class StackSampler(threading.Thread):
         One entry per distinct function seen on a sampled stack, with its
         ``function`` name, ``module``, ``file`` and ``line`` number
     stacks : list of tuple
-        Every distinct stack sampled, as a tuple of indexes into
-        :attr:`functions`, innermost frame first.
+        Every distinct function call stack sampled, as a tuple of function indexes,
+        innermost function first.
     snapshots : list of tuple
-        One ``(time, stack)`` per sample, in time order: seconds since the
-        build started and an index into :attr:`stacks`.
+        One ``(start_time, stack index)`` entry per sample/snapshot.
     """
 
-    def __init__(self, recorder: EventLogger, interval: float, thread_id: int):
+    def __init__(self, recorder: EventLogger, interval: float, build_thread_id: int):
         super().__init__(name="sphinx-benchmark-sampler", daemon=True)
         self.recorder = recorder
         self.interval = interval
-        self.thread_id = thread_id
+        self.build_thread_id = build_thread_id
         self.functions: list[dict] = []
         self.stacks: list[tuple[int, ...]] = []
         self.snapshots: list[tuple[float, int]] = []
-        self._index: dict = {}
-        self._stack_index: dict[tuple[int, ...], int] = {}
-        self._stop_event = threading.Event()
+        self._function_index: dict = {}  # key: function's code object, value: index of the function
+        self._stack_index: dict[
+            tuple[int, ...], int
+        ] = {}  # key: tuple of function indexes in a function call stack, value: index of the stack
+        self._stop_event = threading.Event()  # shared flag (set to False) that this daemon thread checks every `self.interval` ms to decide whether to take another sample or exit (if the docs build thread is finished)
 
     def run(self):
         try:
-            while not self._stop_event.wait(self.interval):
-                frame = sys._current_frames().get(self.thread_id)
+            while not self._stop_event.wait(
+                self.interval
+            ):  # this loop takes 1 sample/snapshot
+                frame = sys._current_frames().get(self.build_thread_id)
                 if frame is None:
                     continue
                 t = perf_counter() - (self.recorder.start_time or 0.0)
                 stack = []
                 while frame is not None:
-                    code = frame.f_code
-                    idx = self._index.get(code)
+                    code_obj = frame.f_code
+                    idx = self._function_index.get(code_obj)
                     if idx is None:
-                        idx = self._index[code] = len(self.functions)
+                        idx = self._function_index[code_obj] = len(self.functions)
                         self.functions.append(
                             {
-                                "function": code.co_qualname,
+                                "function": code_obj.co_qualname,
                                 # compiled Jinja templates have no __name__: store the file instead
                                 "module": frame.f_globals.get("__name__")
-                                or os.path.basename(code.co_filename),
-                                "file": code.co_filename,
-                                "line": code.co_firstlineno,
+                                or os.path.basename(code_obj.co_filename),
+                                "file": code_obj.co_filename,
+                                "line": code_obj.co_firstlineno,
                             }
                         )
                     stack.append(idx)
-                    frame = frame.f_back
+                    frame = frame.f_back  # collecting the full function call stack
                 key = tuple(stack)
                 stack_id = self._stack_index.get(key)
                 if stack_id is None:
@@ -401,12 +402,61 @@ class StackSampler(threading.Thread):
 
     def stop(self):
         """Stop sampling and wait for the thread to finish."""
-        self._stop_event.set()
+        self._stop_event.set()  # tells the daemon thread to stop sampling
         if self.is_alive():
             self.join()
 
     def records(self, app: Sphinx) -> dict:
-        """Turn the snapshots into the ``"frames"`` value of the JSON."""
+        """Turn the snapshots into the ``"frames"`` value of the JSON.
+
+        Frames are collected and stored as follows:
+
+        - `sampling_interval`: the interval in seconds between two samples
+        - `samples`: the total number of samples/snapshots collected
+        - `functions`: one entry per distinct function ever seen in any snapshot, with
+          its function name, module, file, line, kind and extension. Its position in
+          this list is its function index.
+        - `stacks`: one entry per distinct stack of functions ever seen. Each is a
+          list of function indexes, innermost function first i.e. index 0 is the function
+          running, the last one is the outermost function. stack generated using `frame.f_back`.
+        - `snapshots`: one entry per sample: [seconds since build start, stack index].
+
+        Examples
+        --------
+
+        ```
+        "sampling_interval": 0.001,
+        "samples": 3,
+        "functions": [
+            {"function": "main",         "module": "sphinx.cmd.build", ...},
+            {"function": "Sphinx.build", "module": "sphinx.application", ...},
+            {"function": "parse",        "module": "docutils.parsers.rst", ...}
+        ],
+        "stacks":    [[2, 1, 0], [1, 0]],
+        "snapshots": [[0.0012, 0], [0.0021, 0], [0.0033, 1]]
+        ```
+
+        Read it as: the first two samples/snapshots saw that the docs build thread
+        was running inside `parse` function, which was called by `Sphinx.build`,
+        which was called by `main`. The third sample saw build inside `Sphinx.build`.
+
+        Notes
+        -----
+
+        Nothing in frames explicitly tells us if it was in an event or handler or gap.
+        That gets figured out later by comparing the snapshot times to the start times
+        and durations of the events and handler calls records.
+
+        Overheads:
+        - Each sample itself takes about a few µs, during which the build thread is paused.
+        - GIL's switch interval (`sys.getswitchinterval()` --> 5 ms): when the sampler's
+          1 ms sleep expires it has to re-acquire the GIL. If the build thread is
+          running Python code, the sampler thread waits one switch interval (5 ms)
+          and then requests the GIL, which the build thread hands over at its next
+          bytecode boundary. So samples are never closer than about 1 ms, or could
+          typically be sleep + one switch interval apart (~6 ms). But, if C code
+          is running then that can hold the GIL for longer, which can add an overhead.
+        """
         functions = []
         for f in self.functions:
             kind, extension = classify_module(f["module"], app)
