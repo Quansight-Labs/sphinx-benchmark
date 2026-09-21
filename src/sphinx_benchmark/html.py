@@ -946,6 +946,7 @@ th, td { padding: .35rem .6rem; border-bottom: 1px solid var(--line);
   text-align: left; }
 th { border-bottom: 2px solid var(--ink); white-space: nowrap; }
 td.num { text-align: right; font-family: var(--mono); }
+td:not(.num) { overflow-wrap: anywhere; }
 td a, h2 a, .legend a { color: var(--accent); }
 tr.total td { border-top: 2px solid var(--line); color: var(--muted); }
 h3 { font-size: 1rem; margin: 1.5rem 0 .3rem; }
