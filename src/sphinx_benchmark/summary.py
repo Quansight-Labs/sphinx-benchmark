@@ -718,25 +718,20 @@ def _under_emit(stack: tuple[int, ...], functions: list[dict]) -> tuple[int, ...
     return stack
 
 
-def _profile(
-    label: str,
-    scope: str,
+def _tree_nodes(
     counts: dict[tuple[int, ...], float],
-    functions: list[dict],
-    seconds: float,
     where_counts: dict[tuple[int, ...], Counter] | None = None,
-    samples: int | None = None,
-) -> Profile:
-    """Aggregate sampled stacks into a :class:`Profile`.
+) -> tuple[list[list[int]], list[Counter], list[float], dict[int, list[int]]]:
+    """Turn sampled stacks into a call tree.
 
     ``counts`` maps a stack (innermost frame first) to how often it was
     sampled; ``where_counts`` (optional) maps a stack to a ``Counter`` of
-    where the build was for those samples, for :attr:`ProfileNode.where_seconds`.
-    The stacks are first turned into a tree of ``[frame, parent, self]``
-    nodes (``parent`` is ``-1`` for a root; a parent always precedes its
-    children), then sample counts become seconds with ``seconds / samples``.
-    If ``samples`` is given, ``counts`` (and ``where_counts``) are already
-    in seconds and are used as they are.
+    where the build was for those samples.
+
+    Returns ``(nodes, node_where, totals, children)``. Each node is
+    ``[frame, parent, self]`` (``parent`` is ``-1`` for a root; a parent
+    always precedes its children). ``node_where`` and ``totals`` include
+    a node's descendants.
     """
     nodes: list[list[int]] = []
     index: dict[tuple[int, int], int] = {}  # (parent, frame) -> node
@@ -753,23 +748,34 @@ def _profile(
         nodes[parent][2] += count
         if where_counts is not None:
             node_where[parent].update(where_counts[stack])
-    if samples is None:
-        samples = sum(counts.values())
-        scale = seconds / samples if samples else 0.0
-    else:
-        scale = 1.0
 
     totals = [n[2] for n in nodes]
     children: dict[int, list[int]] = defaultdict(list)
-    self_by_frame: Counter = Counter()
     for i in range(len(nodes) - 1, -1, -1):
-        frame, parent, own = nodes[i]
+        parent = nodes[i][1]
         if parent >= 0:
             totals[parent] += totals[i]
             node_where[parent].update(node_where[i])
             children[parent].append(i)
+    return nodes, node_where, totals, children
+
+
+def _rows(
+    nodes: list[list[int]],
+    totals: list[float],
+    children: dict[int, list[int]],
+    functions: list[dict],
+    scale: float,
+) -> tuple[ProfileRow, ...]:
+    """One :class:`ProfileRow` per function, sorted by self time descending.
+
+    Standard-library self time is charged to the nearest non-stdlib
+    caller; a total counts a function once per stack even if it recurses.
+    """
+    self_by_frame: Counter = Counter()
+    for i in range(len(nodes) - 1, -1, -1):
+        own = nodes[i][2]
         if own:
-            # charge standard-library time to the nearest non-stdlib caller
             charged = i
             while (
                 functions[nodes[charged][0]]["kind"] == "stdlib"
@@ -778,7 +784,6 @@ def _profile(
                 charged = nodes[charged][1]
             self_by_frame[nodes[charged][0]] += own
 
-    # total per frame, counting a frame once per stack even if it recurses
     total_by_frame: Counter = Counter()
     on_path: Counter = Counter()
     stack = [(i, False) for i, n in enumerate(nodes) if n[1] < 0]
@@ -794,7 +799,7 @@ def _profile(
         stack.append((i, True))
         stack.extend((c, False) for c in children[i])
 
-    rows = tuple(
+    return tuple(
         sorted(
             (
                 _row(
@@ -808,6 +813,30 @@ def _profile(
             reverse=True,
         )
     )
+
+
+def _profile(
+    label: str,
+    scope: str,
+    counts: dict[tuple[int, ...], float],
+    functions: list[dict],
+    seconds: float,
+    where_counts: dict[tuple[int, ...], Counter] | None = None,
+    samples: int | None = None,
+) -> Profile:
+    """Aggregate sampled stacks into a :class:`Profile`.
+
+    ``counts`` and ``where_counts`` are as in :func:`_tree_nodes`. Sample
+    counts become seconds with ``seconds / samples``; if ``samples`` is
+    given, they are already in seconds and are used as they are.
+    """
+    nodes, node_where, totals, children = _tree_nodes(counts, where_counts)
+    if samples is None:
+        samples = sum(counts.values())
+        scale = seconds / samples if samples else 0.0
+    else:
+        scale = 1.0
+    rows = _rows(nodes, totals, children, functions, scale)
 
     def node(i: int) -> ProfileNode:
         f = functions[nodes[i][0]]
