@@ -119,6 +119,22 @@ Each timed call becomes a `HandlerCall` record and each event emission becomes a
 `Event` record, both kept in one `EventLogger`. All times are measured from the moment
 the extension started, so everything shares a starting point.
 
+The timers only see events and handlers, so they can't tell which functions the time inside
+an event, a handler or a gap went to. For that, `setup()` also starts a background daemon thread
+(`StackSampler`). It sleeps for 1 ms (the sampling interval), then reads the docs build thread's current
+function call stack with `sys._current_frames()`, walks it with `frame.f_back` from the running function up to
+the outermost one, and stores it along with the time since the build started. To take a sample the thread needs
+the GIL, which the build thread hands over at its next I/O call or after Python's GIL switch interval
+(5 ms by default), so two samples can be more than 1 ms apart. The samples go into the JSON as `frames`.
+
+When a report is made, every sample is placed, by its time, in the innermost thing the build was in at that
+moment: a handler call, an event emission (outside its handlers) or a gap between two top-level emissions.
+The samples of one event, handler or gap are then merged into a call tree, where stacks that start with the same
+functions share those nodes. Each sample is worth `measured time / number of samples` of that event, handler or
+gap, so a call tree always adds up to the measured time. A function's self time comes from the samples in which it
+was the one running (time in the Python standard library is counted towards its caller), and its total time also
+includes everything it called. These numbers are estimates, not measured times.
+
 At `build-finished` (at priority 999, so other extensions' handlers gets executed first)
 the extension works out each event's own time, classify every handler with where it came from,
 and dumps everything into a JSON.

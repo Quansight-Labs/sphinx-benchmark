@@ -611,7 +611,16 @@ def _gap_page_body(
 # ----------------------------------------------------------------- profile --
 
 
-def _profile_section(p: Profile, min_total_pct: float = 0.5) -> str:
+#: Banner under the tab bar of every call tree and function-wise breakdown page.
+_SAMPLED_WARNING_NOTE = """
+<div class="banner"><b>Warning:</b> This call trees and function-wise breakdown tables are estimated from function
+call stacks that a background daemon thread sampled while the docs were being built;
+these are not the exact times measured by wrapping any Sphinx objects. For more information, see
+<a href="https://github.com/Schefflera-Arboricola/sphinx-benchmark#how-are-benchmarks-calculated">How
+are benchmarks calculated?</a></div>"""
+
+
+def _profile_section(p: Profile, interval: float, min_total_pct: float = 0.5) -> str:
     """The sampled breakdown of one gap, event, handler or the whole build
     (``p.scope``): the functions with a total of at least ``min_total_pct``
     percent of it.
@@ -645,13 +654,14 @@ def _profile_section(p: Profile, min_total_pct: float = 0.5) -> str:
         "build": "during the build",
     }[p.scope]
     return f"""
-<h2>Where the time inside the {p.scope} goes</h2>
-<p class="meta">{p.samples} stack samples of the build thread were taken {covers}
-({p.seconds:.6f}s), so the times below are estimates.
-<b>Self</b> is time in a function's own code (calls into the Python standard
-library count towards the caller); <b>Total</b> is the function and everything
-it called.</p>
-<p class="meta">Functions with a total of at least {min_total_pct}% of the {p.scope}, by
+<p class="meta">{p.samples} stack samples of the build thread
+(sampling interval: {interval * 1000:g} ms) were taken {covers}
+({p.seconds:.6f}s), so the times below are estimates.</p>
+<p class="meta">Note: two samples can be more than {interval * 1000:g} ms apart.
+To record a sample the sampler thread needs Python's GIL, which can take up
+to 5 ms (the default GIL switch interval); and it can take longer if something
+is keeping the GIL busy.</p>
+<p class="meta">Functions with a total time of at least {min_total_pct}% of the {p.scope}, by
 self time; click a column heading to re-sort. Hover a function for its file and line.</p>
 <table class="sortable">
 <thead><tr>{func_header}</tr></thead>
@@ -772,7 +782,9 @@ def _tree_graph_svg(p: Profile, min_pct: float = 1.0, by_where: bool = False) ->
     )
 
 
-def _tree_page_body(p: Profile, s: BuildSummary, by_where: bool = False) -> str:
+def _tree_page_body(
+    p: Profile, s: BuildSummary, interval: float, by_where: bool = False
+) -> str:
     if by_where:
         legend_items = [(_WHERE_LABEL[w], c) for w, c in _WHERE_COLOUR.items()]
         coloured = (
@@ -791,11 +803,13 @@ def _tree_page_body(p: Profile, s: BuildSummary, by_where: bool = False) -> str:
     )
     return f"""
 <p class="meta">{p.seconds:.6f}s ({s.pct(p.seconds):.2f}% of the build), estimated
-from {p.samples} stack samples. Read top to bottom: the box at the top is the
-outermost function, each arrow points to a function it called, and every box shows
-how much of the {escape(p.scope)} was spent in it and everything it called. Branches
-under 1% of the {escape(p.scope)} are left out. {coloured}. <b>Hover a box</b> for
-where the function is defined (file:line) and its self time.</p>
+from {p.samples} stack samples (sampling interval: {interval * 1000:g} ms). Every node shows how much of the {escape(p.scope)}
+was spent in it. Branches under 1% of the {escape(p.scope)} are left out. {coloured}.
+<b>Hover a box</b> for where the function is defined (file:line) and its self time.</p>
+<p class="meta">Note: two samples can be more than {interval * 1000:g} ms apart.
+To record a sample the sampler thread needs Python's GIL, which can take up
+to 5 ms (the default GIL switch interval); and it can take longer if something
+is keeping the GIL busy.</p>
 <ul class="legend inline">{legend}</ul>
 <div class="tree-wrap">{_tree_graph_svg(p, by_where=by_where)}</div>
 <div id="tip" class="tooltip" hidden></div>"""
@@ -848,13 +862,13 @@ def write_report(s: BuildSummary, out_dir: str, data: dict, json_path: str = "")
             else ""
         )
         bodies = {
-            "tree": ("Call tree", _tree_page_body(p, s, **tree_kwargs)),
-            "functions": ("Function-wise breakdown", _profile_section(p)),
+            "tree": ("Call tree", _tree_page_body(p, s, interval, **tree_kwargs)),
+            "functions": ("Function-wise breakdown", _profile_section(p, interval)),
         }
         for tab, (heading, body) in bodies.items():
             body = (
                 f"{back}\n<h1>{heading}: {escape(p.label)}</h1>\n"
-                f"{_tabs(p, files, tab)}{body}"
+                f"{_tabs(p, files, tab)}{_SAMPLED_WARNING_NOTE}{body}"
             )
             write(files[tab], _page(f"{heading}: {what}", nav, body, s, json_path))
 
@@ -868,6 +882,7 @@ def write_report(s: BuildSummary, out_dir: str, data: dict, json_path: str = "")
     )
     # locate the stack snapshots once; every profile below is built from them
     frames = load_frames(data)
+    interval = (data.get("frames") or {}).get("sampling_interval", 0.0)
     profiles = gap_profiles(frames, s, data)
     combined = combined_gap_profile(profiles)
     files = _profile_files("gaps.html")
@@ -950,6 +965,10 @@ td:not(.num) { overflow-wrap: anywhere; }
 td a, h2 a, .legend a { color: var(--accent); }
 tr.total td { border-top: 2px solid var(--line); color: var(--muted); }
 h3 { font-size: 1rem; margin: 1.5rem 0 .3rem; }
+/* warning banner under the tab bar of the sampled pages */
+.banner { margin: 1rem 0; padding: .5rem .8rem; font-size: .9rem; border-radius: 4px;
+  background: #fff3cd; color: #5c4400; border: 1px solid #e6c766; }
+.banner a { color: inherit; font-weight: 600; }
 /* tab bar shared by a sampled page and its call tree page; stays in view */
 .tabs { position: sticky; top: 0; z-index: 1; display: flex; gap: .4rem;
   padding: .5rem 0; background: var(--bg); border-bottom: 1px solid var(--line); }

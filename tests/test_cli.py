@@ -541,12 +541,21 @@ def test_table_and_html_show_gap_profiles(tmp_path, capsys):
     functions_page = (
         report / "gap-functions-builder-inited----doctree-read.html"
     ).read_text(encoding="utf-8")
-    assert "Where the time inside the gap goes" in functions_page
     assert 'title="b.py:2"' in functions_page  # file:line of Builder.read_doc
     tree_page = (report / "gap-tree-builder-inited----doctree-read.html").read_text(
         encoding="utf-8"
     )
     assert "<svg" in tree_page and 'marker-end="url(#arrow)"' in tree_page
+    # both sampled pages say up front that they are estimates, the timings page doesn't
+    assert (
+        "sampled while the docs" in tree_page
+        and "sampled while the docs" in functions_page
+    )
+    assert "sampled while the docs" not in gap_page
+    # ... with the sampling interval, and why samples can be further apart than it
+    for page in (tree_page, functions_page):
+        assert "sampling interval: 1 ms" in page
+        assert "more than 1 ms apart" in page
     # one box per function on the tree, with where it is defined on hover
     assert tree_page.count('class="node"') == 5  # main, read_doc, parse, parse, stat
     assert "Builder.read_doc  [sphinx.builders]\nb.py:2" in tree_page
@@ -660,7 +669,6 @@ def test_html_event_handler_and_build_pages(tmp_path):
     functions = (report / "event-functions-builder-inited.html").read_text(
         encoding="utf-8"
     )
-    assert "Where the time inside the event goes" in functions
     assert "<th>% event" in functions and "<th>% gap" not in functions
     tree = (report / "event-tree-builder-inited.html").read_text(encoding="utf-8")
     assert "Call tree: builder-inited" in tree and "<svg" in tree
@@ -676,7 +684,6 @@ def test_html_event_handler_and_build_pages(tmp_path):
     functions = (report / "handler-functions-gen_gallery.html").read_text(
         encoding="utf-8"
     )
-    assert "Where the time inside the handler goes" in functions
     assert "<th>% handler" in functions
     assert "<svg" in (report / "handler-tree-gen_gallery.html").read_text(
         encoding="utf-8"
@@ -690,7 +697,6 @@ def test_html_event_handler_and_build_pages(tmp_path):
     assert "4.900s inside a handler" in build and "0.700s in a gap" in build
     assert 'href="build-functions.html"' in build
     functions = (report / "build-functions.html").read_text(encoding="utf-8")
-    assert "Where the time inside the build goes" in functions
     assert "<th>% build" in functions
 
 
