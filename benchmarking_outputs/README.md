@@ -95,15 +95,3 @@ build, a background thread takes a snapshot of the build's call stack every few
 milliseconds (it sleeps 1ms between snapshots, but needs the GIL to take one, which the
 build thread hands over at its next I/O call or after Python's 5ms switch interval); the snapshots that fall in the gap are converted to seconds using the gap's measured
 duration, so all of these numbers are estimates.
-
-**Top functions by self time** : **Self** is the time in the function's own code (time
-spent in the Python standard library, like `Path.stat()` or `re`, counts towards the
-function that called it); **Total** is the function plus everything it called. These
-are the same idea as an event's own time and duration.
-
-The HTML report has the same table on every gap's page, plus a link to the gap's
-**call tree** drawn as a graph: the outermost function at the top, an arrow from each
-function to the functions it called, and each box showing how much of the gap was spent
-in it and everything under it. Hover a box for the file and line where the function is
-defined. Branches under 1% of the gap are left out. The Gaps page links to the same
-graph for all gaps together, so reading, resolving and writing can be compared side by side.
