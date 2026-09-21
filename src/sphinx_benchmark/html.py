@@ -6,14 +6,18 @@ event, per handler, and per gap pair, and the shared assets:
 - ``index.html``    : overview with a pie chart of build % (events' own time and the gaps between them, labels in descending order)
 - ``events.html``   : handler-breakdown table per event
 - ``gaps.html``     : the gaps summary table
-- ``tree.html``     : (when the build was sampled) the call tree of the whole
+- ``build.html``    : (when the build was sampled) the call tree of the whole
   build, each box coloured by where the build was (inside a handler, inside
   an event but outside its handlers, in a gap, or neither)
 - ``event-*.html``  : every emission of one event
 - ``handler-*.html``: every call of one handler, filterable by event
 - ``gap-*.html``    : every individual gap between one pair of events
-- when the build was sampled, the event, handler and gap pages also show
-  where the time inside them goes, per function
+- when the build was sampled, a tab bar on the event, handler and gap pages
+  leads to their call tree and functions pages:
+- ``event-functions-*.html``, ``handler-functions-*.html``,
+  ``gap-functions-*.html``, ``gaps-functions.html``, ``build-functions.html``:
+  where the time inside one event, handler or gap (all gaps together, the
+  whole build) goes, per function
 - ``event-tree-*.html``, ``handler-tree-*.html``, ``gap-tree-*.html``,
   ``gaps-tree.html``: the sampled call tree of one event, handler or gap
   (of all gaps together) drawn as a graph; hover a node for where the
@@ -103,7 +107,7 @@ _PAGES = [
     ("index.html", "Overview"),
     ("events.html", "Events &amp; handlers"),
     ("gaps.html", "Gaps"),
-    ("tree.html", "Call tree"),
+    ("build.html", "Whole build"),
 ]
 
 
@@ -228,6 +232,46 @@ def _page(
 </body>
 </html>
 """
+
+
+#: Tab label for the table of recorded timings a sampled page starts with,
+#: per profile scope (the whole-build call tree page has no such table).
+_TIMINGS_TAB = {"event": "Emissions", "handler": "Calls", "gap": "Gaps"}
+
+
+def _profile_files(page: str) -> dict[str, str]:
+    """The files of a sampled page, per tab: its own (the recorded timings)
+    and its call tree and functions pages (``event-x.html`` gets
+    ``event-tree-x.html``, ``gaps.html`` gets ``gaps-tree.html``).
+    """
+    head, sep, tail = page.removesuffix(".html").partition("-")
+    return {
+        "timings": page,
+        "tree": f"{head}-tree{sep}{tail}.html",
+        "functions": f"{head}-functions{sep}{tail}.html",
+    }
+
+
+def _tabs(p: Profile | None, files: dict[str, str], current: str) -> str:
+    """The tab bar shared by the pages in ``files``, putting the recorded
+    timings, the call tree and the functions table one click apart.
+    ``current`` is the tab being rendered. Empty without a profile: there
+    is nothing to switch to.
+    """
+    if p is None:
+        return ""
+    labels = {
+        "timings": _TIMINGS_TAB.get(p.scope, ""),
+        "tree": "Call tree",
+        "functions": "Function-wise breakdown",
+    }
+    links = "".join(
+        f'<a href="{files[tab]}"{' class="current"' if tab == current else ""}>'
+        f"{label}</a>"
+        for tab, label in labels.items()
+        if tab in files
+    )
+    return f'<div class="tabs">{links}</div>'
 
 
 # ---------------------------------------------------------------- overview --
@@ -359,7 +403,7 @@ def _events_body(s: BuildSummary, links: _Links) -> str:
 # -------------------------------------------------------------------- gaps --
 
 
-def _gaps_body(s: BuildSummary, links: _Links, profile: Profile | None) -> str:
+def _gaps_body(s: BuildSummary, links: _Links, tabs: str = "") -> str:
     header = "".join(
         _th(n) for n in ("Between", "Gap Total(s)", "Count", "Avg Gap(ms)", "% build")
     )
@@ -380,6 +424,7 @@ def _gaps_body(s: BuildSummary, links: _Links, profile: Profile | None) -> str:
     rows.append(row("(finish, after last emission)", s.finish, None))
     body = f"""
 <h1>Gaps between emissions</h1>
+{tabs}
 <p class="meta">Sphinx emits events at fixed points in the build; the work between
 two emissions (parsing, writing output) is not inside emit() and so is not
 recorded per handler. These rows account for that time.</p>
@@ -397,12 +442,6 @@ recorded per handler. These rows account for that time.</p>
             f'<p class="warn">WARNING: {s.overlaps} negative gaps -- top-level '
             "emissions overlap, so these timings are unreliable</p>"
         )
-    if profile is not None:
-        body += _profile_section(profile, "gaps-tree.html").replace(
-            "<h2>Where the time inside the gap goes</h2>",
-            "<h2>Where the time of all gaps goes (startup included)</h2>",
-            1,
-        )
     return body
 
 
@@ -414,8 +453,7 @@ def _event_page_body(
     rows: tuple,
     s: BuildSummary,
     links: _Links,
-    profile: Profile | None = None,
-    tree_page: str = "",
+    tabs: str = "",
 ) -> str:
     header = "".join(
         _th(n)
@@ -449,6 +487,7 @@ def _event_page_body(
     return f"""
 <p class="backlink"><a href="events.html">← all events</a></p>
 <h1>Event: {escape(name)}</h1>
+{tabs}
 <p class="meta">{len(rows)} recorded emissions · {total_own:.6f}s own time
  ({s.pct(total_own):.2f}% of build). Click a column heading to sort.</p>
 <table class="sortable">
@@ -459,7 +498,7 @@ def _event_page_body(
 <td class="num">{s.pct(total_own):.2f}%</td></tr>
 </tbody>
 </table>
-{in_progress}{_profile_section(profile, tree_page) if profile is not None else ""}"""
+{in_progress}"""
 
 
 def _handler_page_body(
@@ -467,8 +506,7 @@ def _handler_page_body(
     rows: tuple,
     s: BuildSummary,
     links: _Links,
-    profile: Profile | None = None,
-    tree_page: str = "",
+    tabs: str = "",
 ) -> str:
     # default order: biggest share of the build first
     rows = tuple(sorted(rows, key=lambda r: r.duration, reverse=True))
@@ -507,6 +545,7 @@ def _handler_page_body(
     return f"""
 <p class="backlink"><a href="events.html">← all events</a></p>
 <h1>Handler: {escape(name)}</h1>
+{tabs}
 <p class="meta">{len(rows)} recorded calls across {len(from_events)} event(s)
  · {total:.6f}s total ({s.pct(total):.2f}% of build). Rows are ordered by
 duration (share of build) descending; click a column heading to re-sort.</p>
@@ -522,7 +561,7 @@ calls are shown.</p></noscript>
 <td class="num">{total:.6f}</td>
 <td class="num">{s.pct(total):.2f}%</td><td></td><td></td><td></td></tr>
 </tbody>
-</table>{_profile_section(profile, tree_page) if profile is not None else ""}"""
+</table>"""
 
 
 def _gap_page_body(
@@ -531,8 +570,7 @@ def _gap_page_body(
     rows: tuple,
     s: BuildSummary,
     links: _Links,
-    profile: Profile | None = None,
-    tree_page: str = "",
+    tabs: str = "",
 ) -> str:
     header = "".join(
         _th(n)
@@ -556,6 +594,7 @@ def _gap_page_body(
     return f"""
 <p class="backlink"><a href="gaps.html">← all gaps</a></p>
 <h1>Gap: {links.event_a(source)} → {links.event_a(target)}</h1>
+{tabs}
 <p class="meta">During the build there were multiple times when the {source} and {target} events had a time gap between their consecutive emissions. In the table below, each row is one such gap.</p>
 <p class="meta">{len(rows)} occurrences · {total:.6f}s total
  ({s.pct(total):.2f}% of build). Click a column heading to sort.</p>
@@ -566,18 +605,15 @@ def _gap_page_body(
 <td class="num">{total:.6f}</td>
 <td class="num">{s.pct(total):.2f}%</td></tr>
 </tbody>
-</table>{_profile_section(profile, tree_page) if profile is not None else ""}"""
+</table>"""
 
 
 # ----------------------------------------------------------------- profile --
 
 
-def _profile_section(
-    p: Profile, tree_page: str = "", min_total_pct: float = 0.5
-) -> str:
+def _profile_section(p: Profile, min_total_pct: float = 0.5) -> str:
     """The sampled breakdown of one gap, event, handler or the whole build
-    (``p.scope``): a link to the call tree graph in ``tree_page`` (if
-    any), and the functions with a total of at least ``min_total_pct``
+    (``p.scope``): the functions with a total of at least ``min_total_pct``
     percent of it.
     """
     pct = f"% {p.scope}"
@@ -602,13 +638,6 @@ def _profile_section(
         for r in p.rows
         if p.pct(r.total_seconds) >= min_total_pct
     )
-    tree = (
-        f'<h3>Call tree</h3><p class="meta"><a href="{tree_page}">Open the call tree '
-        f"as a graph</a>: which function called which, and how much of the {p.scope} "
-        "went under each.</p>"
-        if tree_page
-        else ""
-    )
     covers = {
         "gap": "during this gap",
         "event": "during this event's emissions, outside nested emissions",
@@ -622,8 +651,6 @@ def _profile_section(
 <b>Self</b> is time in a function's own code (calls into the Python standard
 library count towards the caller); <b>Total</b> is the function and everything
 it called.</p>
-{tree}
-<h3>Functions</h3>
 <p class="meta">Functions with a total of at least {min_total_pct}% of the {p.scope}, by
 self time; click a column heading to re-sort. Hover a function for its file and line.</p>
 <table class="sortable">
@@ -745,9 +772,7 @@ def _tree_graph_svg(p: Profile, min_pct: float = 1.0, by_where: bool = False) ->
     )
 
 
-def _tree_page_body(
-    p: Profile, s: BuildSummary, back: str, back_label: str, by_where: bool = False
-) -> str:
+def _tree_page_body(p: Profile, s: BuildSummary, by_where: bool = False) -> str:
     if by_where:
         legend_items = [(_WHERE_LABEL[w], c) for w, c in _WHERE_COLOUR.items()]
         coloured = (
@@ -764,10 +789,7 @@ def _tree_page_body(
         f'<li><span class="swatch" style="background:{c}"></span>{escape(k)}</li>'
         for k, c in legend_items
     )
-    backlink = f'<p class="backlink"><a href="{back}">← {escape(back_label)}</a></p>'
     return f"""
-{backlink if back else ""}
-<h1>Call tree: {escape(p.label)}</h1>
 <p class="meta">{p.seconds:.6f}s ({s.pct(p.seconds):.2f}% of the build), estimated
 from {p.samples} stack samples. Read top to bottom: the box at the top is the
 outermost function, each arrow points to a function it called, and every box shows
@@ -782,13 +804,10 @@ where the function is defined (file:line) and its self time.</p>
 # ------------------------------------------------------------- build tree --
 
 
-def _build_tree_body(p: Profile | None, s: BuildSummary) -> str:
-    if p is None:
-        return """
+_NO_BUILD_TREE = """
 <h1>Call tree: (whole build)</h1>
 <p class="meta">The build was not sampled,
 so there is no call tree.</p>"""
-    return _tree_page_body(p, s, "", "", by_where=True) + _profile_section(p)
 
 
 # ------------------------------------------------------------------- write --
@@ -816,6 +835,29 @@ def write_report(s: BuildSummary, out_dir: str, data: dict, json_path: str = "")
         with open(os.path.join(out_dir, fname), "w", encoding="utf-8") as f:
             f.write(content)
 
+    def write_profile_pages(
+        p: Profile | None, files: dict[str, str], what: str, nav: str, **tree_kwargs
+    ) -> None:
+        """Write the call tree and functions pages of ``what`` (e.g.
+        ``"event x"``), which is under ``nav`` in the nav bar, if sampled."""
+        if p is None:
+            return
+        back = (
+            f'<p class="backlink"><a href="{files["timings"]}">← {escape(what)}</a></p>'
+            if "timings" in files
+            else ""
+        )
+        bodies = {
+            "tree": ("Call tree", _tree_page_body(p, s, **tree_kwargs)),
+            "functions": ("Function-wise breakdown", _profile_section(p)),
+        }
+        for tab, (heading, body) in bodies.items():
+            body = (
+                f"{back}\n<h1>{heading}: {escape(p.label)}</h1>\n"
+                f"{_tabs(p, files, tab)}{body}"
+            )
+            write(files[tab], _page(f"{heading}: {what}", nav, body, s, json_path))
+
     write(
         "index.html",
         _page("Overview", "index.html", _overview_body(s, links), s, json_path),
@@ -828,18 +870,18 @@ def write_report(s: BuildSummary, out_dir: str, data: dict, json_path: str = "")
     frames = load_frames(data)
     profiles = gap_profiles(frames, s, data)
     combined = combined_gap_profile(profiles)
-    write(
-        "gaps.html",
-        _page("Gaps", "gaps.html", _gaps_body(s, links, combined), s, json_path),
-    )
-    if combined is not None:
-        body = _tree_page_body(combined, s, "gaps.html", "all gaps")
+    files = _profile_files("gaps.html")
+    body = _gaps_body(s, links, _tabs(combined, files, "timings"))
+    write("gaps.html", _page("Gaps", "gaps.html", body, s, json_path))
+    write_profile_pages(combined, files, "all gaps", "gaps.html")
+    # the whole build has no timings page: its call tree is the top-level page
+    whole = build_profile(frames, s, data)
+    files = {"tree": "build.html", "functions": "build-functions.html"}
+    write_profile_pages(whole, files, "whole build", "build.html", by_where=True)
+    if whole is None:
         write(
-            "gaps-tree.html",
-            _page("Call tree, all gaps", "gaps.html", body, s, json_path),
+            "build.html", _page("Call tree", "build.html", _NO_BUILD_TREE, s, json_path)
         )
-    body = _build_tree_body(build_profile(frames, s, data), s)
-    write("tree.html", _page("Call tree", "tree.html", body, s, json_path))
     write("style.css", _STYLE)
     write("report.js", _REPORT_JS)
     # group the raw records once; each detail page then renders its own rows
@@ -847,54 +889,29 @@ def write_report(s: BuildSummary, out_dir: str, data: dict, json_path: str = "")
     ev_profiles = event_profiles(frames, s)
     for name, fname in links.events.items():
         profile = ev_profiles.get(name)
-        tree_fname = "event-tree-" + fname[len("event-") :]
-        body = _event_page_body(
-            name, emissions.get(name, ()), s, links, profile, tree_fname
-        )
+        files = _profile_files(fname)
+        tabs = _tabs(profile, files, "timings")
+        body = _event_page_body(name, emissions.get(name, ()), s, links, tabs)
         write(fname, _page(f"Event {name}", "events.html", body, s, json_path))
-        if profile is not None:
-            body = _tree_page_body(profile, s, fname, f"event {name}")
-            write(
-                tree_fname,
-                _page(f"Call tree {name}", "events.html", body, s, json_path),
-            )
+        write_profile_pages(profile, files, f"event {name}", "events.html")
     calls = all_handler_call_details(data)
     h_profiles = handler_profiles(frames, s)
     for name, fname in links.handlers.items():
         profile = h_profiles.get(name)
-        tree_fname = "handler-tree-" + fname[len("handler-") :]
-        body = _handler_page_body(
-            name, calls.get(name, ()), s, links, profile, tree_fname
-        )
+        files = _profile_files(fname)
+        tabs = _tabs(profile, files, "timings")
+        body = _handler_page_body(name, calls.get(name, ()), s, links, tabs)
         write(fname, _page(f"Handler {name}", "events.html", body, s, json_path))
-        if profile is not None:
-            body = _tree_page_body(profile, s, fname, f"handler {name}")
-            write(
-                tree_fname,
-                _page(f"Call tree {name}", "events.html", body, s, json_path),
-            )
+        write_profile_pages(profile, files, f"handler {name}", "events.html")
     occurrences = all_gap_occurrence_details(data)
     for (source, target), fname in links.gap_pairs.items():
         profile = profiles.get((source, target))
-        tree_fname = "gap-tree-" + fname[len("gap-") :]
-        body = _gap_page_body(
-            source,
-            target,
-            occurrences.get((source, target), ()),
-            s,
-            links,
-            profile,
-            tree_fname,
-        )
+        files = _profile_files(fname)
+        tabs = _tabs(profile, files, "timings")
+        rows = occurrences.get((source, target), ())
+        body = _gap_page_body(source, target, rows, s, links, tabs)
         write(fname, _page(f"Gap {source} → {target}", "gaps.html", body, s, json_path))
-        if profile is not None:
-            body = _tree_page_body(profile, s, fname, f"gap {source} → {target}")
-            write(
-                tree_fname,
-                _page(
-                    f"Call tree {source} → {target}", "gaps.html", body, s, json_path
-                ),
-            )
+        write_profile_pages(profile, files, f"gap {source} → {target}", "gaps.html")
     return out_dir
 
 
@@ -932,6 +949,13 @@ td.num { text-align: right; font-family: var(--mono); }
 td a, h2 a, .legend a { color: var(--accent); }
 tr.total td { border-top: 2px solid var(--line); color: var(--muted); }
 h3 { font-size: 1rem; margin: 1.5rem 0 .3rem; }
+/* tab bar shared by a sampled page and its call tree page; stays in view */
+.tabs { position: sticky; top: 0; z-index: 1; display: flex; gap: .4rem;
+  padding: .5rem 0; background: var(--bg); border-bottom: 1px solid var(--line); }
+.tabs a { padding: .2rem .8rem; border: 1px solid var(--line); border-radius: 1rem;
+  background: var(--panel); color: var(--muted); font-size: .9rem; text-decoration: none; }
+.tabs a:hover { border-color: var(--accent); color: var(--accent); }
+.tabs a.current { border-color: var(--accent); background: var(--accent); color: #fff; }
 /* call tree graph */
 .tree-wrap { overflow: auto; background: var(--panel); border: 1px solid var(--line);
   padding: 1rem; }

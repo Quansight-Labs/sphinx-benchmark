@@ -94,10 +94,10 @@ This is a Sphinx extension that benchmarks and profiles a docs build process [ev
 
    Then a `sphinx_benchmark_report` folder will be created in your build directory. Open the `index.html` present inside
    `sphinx_benchmark_report` in your browser to see the overview and events, handlers and gaps breakdown.
-   Each event's, handler's and gap's page also shows where the time inside it went (per
-   function) and links to its call tree drawn as a graph (caller at the top, arrows to what it
+   Each event's, handler's and gap's page also has tabs to where the time inside it went (per
+   function) and to its call tree drawn as a graph (caller at the top, arrows to what it
    called, each box with its share); hover a box for the file and line where the function is defined.
-   The **Call tree** page draws the whole build, each box coloured by where the build was: inside a
+   The **Whole build** page draws the call tree of the whole build, each box coloured by where the build was: inside a
    handler, inside an event but outside its handlers, or in a gap between events.
    You can also specify the output directory for where you want the `sphinx_benchmark_report` folder to get created, using `--output-dir` option. Or specify a different json file using the `--input` option.
 

@@ -411,7 +411,7 @@ def test_html_long_handler_name(tmp_path):
     handler_pages = [
         p.name
         for p in report.glob("handler-*.html")
-        if not p.name.startswith("handler-tree-")
+        if not p.name.startswith(("handler-tree-", "handler-functions-"))
     ]
     assert len(handler_pages) == 3
     assert all(len(name) < 120 for name in handler_pages)
@@ -529,13 +529,20 @@ def test_table_and_html_show_gap_profiles(tmp_path, capsys):
     report = tmp_path / "report"
     assert main(["run", "html", "-i", str(json_path), "-o", str(report)]) == 0
     gaps_html = (report / "gaps.html").read_text(encoding="utf-8")
-    assert "Where the time of all gaps goes" in gaps_html
+    assert 'href="gaps-functions.html"' in gaps_html
+    assert "Function-wise breakdown: (all gaps, including startup)" in (
+        report / "gaps-functions.html"
+    ).read_text(encoding="utf-8")
     gap_page = (report / "gap-builder-inited----doctree-read.html").read_text(
         encoding="utf-8"
     )
-    assert "Where the time inside the gap goes" in gap_page
     assert 'href="gap-tree-builder-inited----doctree-read.html"' in gap_page
-    assert 'title="b.py:2"' in gap_page  # file:line of Builder.read_doc
+    assert 'href="gap-functions-builder-inited----doctree-read.html"' in gap_page
+    functions_page = (
+        report / "gap-functions-builder-inited----doctree-read.html"
+    ).read_text(encoding="utf-8")
+    assert "Where the time inside the gap goes" in functions_page
+    assert 'title="b.py:2"' in functions_page  # file:line of Builder.read_doc
     tree_page = (report / "gap-tree-builder-inited----doctree-read.html").read_text(
         encoding="utf-8"
     )
@@ -644,37 +651,47 @@ def test_html_event_handler_and_build_pages(tmp_path):
     report = tmp_path / "report"
     assert main(["run", "html", "-i", str(json_path), "-o", str(report)]) == 0
 
-    nav = '<a href="gaps.html">Gaps</a><a href="tree.html">Call tree</a>'
+    nav = '<a href="gaps.html">Gaps</a><a href="build.html">Whole build</a>'
     assert nav in (report / "index.html").read_text(encoding="utf-8")
 
     event_page = (report / "event-builder-inited.html").read_text(encoding="utf-8")
-    assert "Where the time inside the event goes" in event_page
-    assert "<th>% event" in event_page and "<th>% gap" not in event_page
     assert 'href="event-tree-builder-inited.html"' in event_page
+    assert 'href="event-functions-builder-inited.html"' in event_page
+    functions = (report / "event-functions-builder-inited.html").read_text(
+        encoding="utf-8"
+    )
+    assert "Where the time inside the event goes" in functions
+    assert "<th>% event" in functions and "<th>% gap" not in functions
     tree = (report / "event-tree-builder-inited.html").read_text(encoding="utf-8")
     assert "Call tree: builder-inited" in tree and "<svg" in tree
-    # an event that got no samples has no profile section and no tree page
-    assert "Where the time" not in (report / "event-build-finished.html").read_text(
+    # an event that got no samples has no tab bar and no tree or functions page
+    assert 'class="tabs"' not in (report / "event-build-finished.html").read_text(
         encoding="utf-8"
     )
     assert not (report / "event-tree-build-finished.html").exists()
+    assert not (report / "event-functions-build-finished.html").exists()
 
     handler_page = (report / "handler-gen_gallery.html").read_text(encoding="utf-8")
-    assert "Where the time inside the handler goes" in handler_page
-    assert "<th>% handler" in handler_page
     assert 'href="handler-tree-gen_gallery.html"' in handler_page
+    functions = (report / "handler-functions-gen_gallery.html").read_text(
+        encoding="utf-8"
+    )
+    assert "Where the time inside the handler goes" in functions
+    assert "<th>% handler" in functions
     assert "<svg" in (report / "handler-tree-gen_gallery.html").read_text(
         encoding="utf-8"
     )
 
-    build = (report / "tree.html").read_text(encoding="utf-8")
+    build = (report / "build.html").read_text(encoding="utf-8")
     assert "Call tree: (whole build)" in build
     assert 'class="tree light"' in build  # coloured by where the build was
     assert "inside a handler" in build and "in a gap between emissions" in build
     assert 'fill="#c6dff2"' in build  # main is mostly inside handlers: lighter blue
     assert "4.900s inside a handler" in build and "0.700s in a gap" in build
-    assert "Where the time inside the build goes" in build
-    assert "<th>% build" in build
+    assert 'href="build-functions.html"' in build
+    functions = (report / "build-functions.html").read_text(encoding="utf-8")
+    assert "Where the time inside the build goes" in functions
+    assert "<th>% build" in functions
 
 
 def test_without_frames_nothing_changes(tmp_path, capsys):
@@ -689,7 +706,7 @@ def test_without_frames_nothing_changes(tmp_path, capsys):
     assert "Where the time" not in (report / "event-builder-inited.html").read_text(
         encoding="utf-8"
     )
-    assert "was not sampled" in (report / "tree.html").read_text(encoding="utf-8")
+    assert "was not sampled" in (report / "build.html").read_text(encoding="utf-8")
 
 
 def test_profiles_skip_the_unmeasured_build_finished_emission():
