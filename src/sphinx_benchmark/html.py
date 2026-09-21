@@ -101,7 +101,7 @@ PALETTE = [
 
 _PAGES = [
     ("index.html", "Overview"),
-    ("events.html", "Events"),
+    ("events.html", "Events &amp; handlers"),
     ("gaps.html", "Gaps"),
     ("tree.html", "Call tree"),
 ]
