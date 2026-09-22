@@ -1,14 +1,27 @@
 """HTML output: writes a small static report from a :class:`BuildSummary`.
 
-The output directory gets three top-level pages plus one detail page per
+The output directory gets four top-level pages plus one detail page per
 event, per handler, and per gap pair, and the shared assets:
 
 - ``index.html``    : overview with a pie chart of build % (events' own time and the gaps between them, labels in descending order)
 - ``events.html``   : handler-breakdown table per event
 - ``gaps.html``     : the gaps summary table
+- ``build.html``    : (when the build was sampled) the call tree of the whole
+  build, each box coloured by where the build was (inside a handler, inside
+  an event but outside its handlers, in a gap, or neither)
 - ``event-*.html``  : every emission of one event
 - ``handler-*.html``: every call of one handler, filterable by event
 - ``gap-*.html``    : every individual gap between one pair of events
+- when the build was sampled, a tab bar on the event, handler and gap pages
+  leads to their call tree and functions pages:
+- ``event-functions-*.html``, ``handler-functions-*.html``,
+  ``gap-functions-*.html``, ``gaps-functions.html``, ``build-functions.html``:
+  where the time inside one event, handler or gap (all gaps together, the
+  whole build) goes, per function
+- ``event-tree-*.html``, ``handler-tree-*.html``, ``gap-tree-*.html``,
+  ``gaps-tree.html``: the sampled call tree of one event, handler or gap
+  (of all gaps together) drawn as a graph; hover a node for where the
+  function is defined
 - ``style.css``, ``report.js``
 
 Every event name, handler name and gap in the tables is a hyperlink to
@@ -26,11 +39,18 @@ from urllib.parse import quote
 
 from .summary import (
     BuildSummary,
+    Profile,
     all_emission_details,
     all_gap_occurrence_details,
     all_handler_call_details,
+    build_profile,
+    combined_gap_profile,
     event_names,
+    event_profiles,
+    gap_profiles,
     handler_names,
+    handler_profiles,
+    load_frames,
 )
 
 #: What each column means; shown in the "i" tooltip on column headings.
@@ -59,6 +79,12 @@ COLUMN_HELP = {
     "Second event emission#": "The emission number of the second event before which the gap ends (e.g. 6 means after this gap ends the second event was emitted the 6th time during the build process)",
     "Gap start(s)": "Seconds since build start at which the source emission ended.",
     "Gap end(s)": "Seconds since build start at which the target emission began.",
+    "Function": "Qualified name of the function (Class.method for methods); hover for the file and line where it is defined.",
+    "Self time(s)": "Estimated time spent in the function's own code, with calls into the Python standard library charged to the caller. Estimated from stack samples.",
+    "% gap": "Share of this gap's total time.",
+    "% event": "Share of this event's own time (nested emissions excluded).",
+    "% handler": "Share of this handler's total time over all its calls (nested emissions included).",
+    "Total time(s)": "Estimated time spent in the function and in everything it called (a function calling itself is counted once). Estimated from stack samples.",
 }
 
 #: Slice colours for the pie chart, cycled if there are more slices.
@@ -77,7 +103,12 @@ PALETTE = [
     "#a25a4f",
 ]
 
-_PAGES = [("index.html", "Overview"), ("events.html", "Events"), ("gaps.html", "Gaps")]
+_PAGES = [
+    ("index.html", "Overview"),
+    ("events.html", "Events &amp; handlers"),
+    ("gaps.html", "Gaps"),
+    ("build.html", "Whole build"),
+]
 
 
 # ------------------------------------------------------------------- links --
@@ -201,6 +232,46 @@ def _page(
 </body>
 </html>
 """
+
+
+#: Tab label for the table of recorded timings a sampled page starts with,
+#: per profile scope (the whole-build call tree page has no such table).
+_TIMINGS_TAB = {"event": "Emissions", "handler": "Calls", "gap": "Gaps"}
+
+
+def _profile_files(page: str) -> dict[str, str]:
+    """The files of a sampled page, per tab: its own (the recorded timings)
+    and its call tree and functions pages (``event-x.html`` gets
+    ``event-tree-x.html``, ``gaps.html`` gets ``gaps-tree.html``).
+    """
+    head, sep, tail = page.removesuffix(".html").partition("-")
+    return {
+        "timings": page,
+        "tree": f"{head}-tree{sep}{tail}.html",
+        "functions": f"{head}-functions{sep}{tail}.html",
+    }
+
+
+def _tabs(p: Profile | None, files: dict[str, str], current: str) -> str:
+    """The tab bar shared by the pages in ``files``, putting the recorded
+    timings, the call tree and the functions table one click apart.
+    ``current`` is the tab being rendered. Empty without a profile: there
+    is nothing to switch to.
+    """
+    if p is None:
+        return ""
+    labels = {
+        "timings": _TIMINGS_TAB.get(p.scope, ""),
+        "tree": "Call tree",
+        "functions": "Function-wise breakdown",
+    }
+    links = "".join(
+        f'<a href="{files[tab]}"{' class="current"' if tab == current else ""}>'
+        f"{label}</a>"
+        for tab, label in labels.items()
+        if tab in files
+    )
+    return f'<div class="tabs">{links}</div>'
 
 
 # ---------------------------------------------------------------- overview --
@@ -332,7 +403,7 @@ def _events_body(s: BuildSummary, links: _Links) -> str:
 # -------------------------------------------------------------------- gaps --
 
 
-def _gaps_body(s: BuildSummary, links: _Links) -> str:
+def _gaps_body(s: BuildSummary, links: _Links, tabs: str = "") -> str:
     header = "".join(
         _th(n) for n in ("Between", "Gap Total(s)", "Count", "Avg Gap(ms)", "% build")
     )
@@ -353,6 +424,7 @@ def _gaps_body(s: BuildSummary, links: _Links) -> str:
     rows.append(row("(finish, after last emission)", s.finish, None))
     body = f"""
 <h1>Gaps between emissions</h1>
+{tabs}
 <p class="meta">Sphinx emits events at fixed points in the build; the work between
 two emissions (parsing, writing output) is not inside emit() and so is not
 recorded per handler. These rows account for that time.</p>
@@ -376,7 +448,13 @@ recorded per handler. These rows account for that time.</p>
 # ----------------------------------------------------------- detail pages --
 
 
-def _event_page_body(name: str, rows: tuple, s: BuildSummary, links: _Links) -> str:
+def _event_page_body(
+    name: str,
+    rows: tuple,
+    s: BuildSummary,
+    links: _Links,
+    tabs: str = "",
+) -> str:
     header = "".join(
         _th(n)
         for n in (
@@ -409,6 +487,7 @@ def _event_page_body(name: str, rows: tuple, s: BuildSummary, links: _Links) -> 
     return f"""
 <p class="backlink"><a href="events.html">← all events</a></p>
 <h1>Event: {escape(name)}</h1>
+{tabs}
 <p class="meta">{len(rows)} recorded emissions · {total_own:.6f}s own time
  ({s.pct(total_own):.2f}% of build). Click a column heading to sort.</p>
 <table class="sortable">
@@ -422,7 +501,13 @@ def _event_page_body(name: str, rows: tuple, s: BuildSummary, links: _Links) -> 
 {in_progress}"""
 
 
-def _handler_page_body(name: str, rows: tuple, s: BuildSummary, links: _Links) -> str:
+def _handler_page_body(
+    name: str,
+    rows: tuple,
+    s: BuildSummary,
+    links: _Links,
+    tabs: str = "",
+) -> str:
     # default order: biggest share of the build first
     rows = tuple(sorted(rows, key=lambda r: r.duration, reverse=True))
     from_events = sorted({r.event for r in rows})
@@ -460,6 +545,7 @@ def _handler_page_body(name: str, rows: tuple, s: BuildSummary, links: _Links) -
     return f"""
 <p class="backlink"><a href="events.html">← all events</a></p>
 <h1>Handler: {escape(name)}</h1>
+{tabs}
 <p class="meta">{len(rows)} recorded calls across {len(from_events)} event(s)
  · {total:.6f}s total ({s.pct(total):.2f}% of build). Rows are ordered by
 duration (share of build) descending; click a column heading to re-sort.</p>
@@ -479,7 +565,12 @@ calls are shown.</p></noscript>
 
 
 def _gap_page_body(
-    source: str, target: str, rows: tuple, s: BuildSummary, links: _Links
+    source: str,
+    target: str,
+    rows: tuple,
+    s: BuildSummary,
+    links: _Links,
+    tabs: str = "",
 ) -> str:
     header = "".join(
         _th(n)
@@ -503,6 +594,7 @@ def _gap_page_body(
     return f"""
 <p class="backlink"><a href="gaps.html">← all gaps</a></p>
 <h1>Gap: {links.event_a(source)} → {links.event_a(target)}</h1>
+{tabs}
 <p class="meta">During the build there were multiple times when the {source} and {target} events had a time gap between their consecutive emissions. In the table below, each row is one such gap.</p>
 <p class="meta">{len(rows)} occurrences · {total:.6f}s total
  ({s.pct(total):.2f}% of build). Click a column heading to sort.</p>
@@ -514,6 +606,222 @@ def _gap_page_body(
 <td class="num">{s.pct(total):.2f}%</td></tr>
 </tbody>
 </table>"""
+
+
+# ----------------------------------------------------------------- profile --
+
+
+#: Banner under the tab bar of every call tree and function-wise breakdown page.
+_SAMPLED_WARNING_NOTE = """
+<div class="banner"><b>Warning:</b> This call trees and function-wise breakdown tables are estimated from function
+call stacks that a background daemon thread sampled while the docs were being built;
+these are not the exact times measured by wrapping any Sphinx objects. For more information, see
+<a href="https://github.com/Schefflera-Arboricola/sphinx-benchmark/tree/main/benchmarking_outputs/README.md#how-are-benchmarks-calculated">How
+are benchmarks calculated?</a></div>"""
+
+
+def _profile_section(p: Profile, interval: float, min_total_pct: float = 0.5) -> str:
+    """The sampled breakdown of one gap, event, handler or the whole build
+    (``p.scope``): the functions with a total of at least ``min_total_pct``
+    percent of it.
+    """
+    pct = f"% {p.scope}"
+    func_header = "".join(
+        _th(n)
+        for n in (
+            "Function",
+            "Module",
+            "Kind",
+            "Self time(s)",
+            pct,
+            "Total time(s)",
+            pct,
+        )
+    )
+    func_rows = "".join(
+        f'<tr><td title="{escape(f"{r.file}:{r.line}", quote=True)}">'
+        f"{escape(r.function)}</td><td>{escape(r.module)}</td>"
+        f"<td>{escape(r.kind)}</td>{_num_td(r.self_seconds)}"
+        f"{_num_td(p.pct(r.self_seconds), '{:.2f}', '%')}"
+        f"{_num_td(r.total_seconds)}{_num_td(p.pct(r.total_seconds), '{:.2f}', '%')}</tr>"
+        for r in p.rows
+        if p.pct(r.total_seconds) >= min_total_pct
+    )
+    covers = {
+        "gap": "during this gap",
+        "event": "during this event's emissions, outside nested emissions",
+        "handler": "while this handler was running, nested emissions included",
+        "build": "during the build",
+    }[p.scope]
+    return f"""
+<p class="meta">{p.samples} stack samples of the build thread
+(sampling interval: {interval * 1000:g} ms) were taken {covers}
+({p.seconds:.6f}s), so the times below are estimates.</p>
+<p class="meta">Note: two samples can be more than {interval * 1000:g} ms apart.
+To record a sample the sampler thread needs Python's GIL, which can take up
+to 5 ms (the default GIL switch interval); and it can take longer if something
+is keeping the GIL busy.</p>
+<p class="meta">Functions with a total time of at least {min_total_pct}% of the {p.scope}, by
+self time; click a column heading to re-sort. Hover a function for its file and line.</p>
+<table class="sortable">
+<thead><tr>{func_header}</tr></thead>
+<tbody>{func_rows}</tbody>
+</table>"""
+
+
+# --------------------------------------------------------------- tree graph --
+
+#: Node colour per origin of the code.
+_KIND_COLOUR = {
+    "sphinx-internal": "#155e63",
+    "extension": "#c26a2a",
+    "theme": "#8a4fa2",
+    "stdlib": "#8c8c8c",
+}
+_OTHER_COLOUR = "#3a6ea5"  # docutils, jinja2, pygments, ...
+
+#: Node colour per where the build was when the samples were taken (the
+#: whole-build tree), and what to call each in the legend and tooltips.
+_WHERE_COLOUR = {
+    "event": "#7fbde6",  # light blue: inside an event, outside its handlers
+    "handler": "#c6dff2",  # lighter blue: inside a handler
+    "gap": "#f6b8c6",  # light pink: between two emissions
+    "other": "#c8c8c8",  # grey: neither
+}
+_WHERE_LABEL = {
+    "event": "inside an event, outside its handlers",
+    "handler": "inside a handler",
+    "gap": "in a gap between emissions",
+    "other": "neither (overlapping timings)",
+}
+
+_BOX_W, _BOX_H, _COL_GAP, _ROW_GAP = 250, 56, 14, 44
+
+
+def _tree_graph_svg(p: Profile, min_pct: float = 1.0, by_where: bool = False) -> str:
+    """Draw the call tree as an SVG, one box per function: the outermost
+    function at the top, an arrow from each function down to the functions
+    it called. Branches under ``min_pct`` percent of the profile are left
+    out. Each box shows the function, its module, and its time and share;
+    hovering shows where it is defined and its self time.
+
+    Boxes are coloured by the origin of the code, or, with ``by_where``,
+    by where the build mostly was when the function was sampled (inside a
+    handler, inside an event but outside its handlers, in a gap, or
+    neither), with the full split in the tooltip.
+    """
+    cutoff = p.seconds * min_pct / 100
+    boxes: list[str] = []
+    edges: list[str] = []
+    next_col = 0
+    depth_max = 0
+
+    def place(n, depth: int) -> float:
+        """Assign columns bottom-up: a box is centred over its children."""
+        nonlocal next_col, depth_max
+        depth_max = max(depth_max, depth)
+        kids = [c for c in n.children if c.total_seconds >= cutoff]
+        xs = [place(c, depth + 1) for c in kids]
+        if xs:
+            x = (xs[0] + xs[-1]) / 2
+        else:
+            x = next_col * (_BOX_W + _COL_GAP)
+            next_col += 1
+        y = depth * (_BOX_H + _ROW_GAP)
+        if by_where and n.where_seconds:
+            mostly = max(n.where_seconds, key=n.where_seconds.get)
+            colour = _WHERE_COLOUR.get(mostly, _WHERE_COLOUR["other"])
+        else:
+            colour = _KIND_COLOUR.get(n.kind, _OTHER_COLOUR)
+        name = n.function if len(n.function) <= 28 else n.function[:27] + "…"
+        module = n.module if len(n.module) <= 32 else n.module[:31] + "…"
+        tip = (
+            f"{n.function}  [{n.module}]\n{n.file}:{n.line}\n"
+            f"total {n.total_seconds:.3f}s ({p.pct(n.total_seconds):.2f}% of {p.scope})\n"
+            f"self  {n.self_seconds:.3f}s ({p.pct(n.self_seconds):.2f}% of {p.scope})"
+        )
+        if by_where:
+            tip += "".join(
+                f"\n{secs:.3f}s {_WHERE_LABEL.get(w, w)}"
+                for w, secs in sorted(
+                    n.where_seconds.items(), key=lambda it: it[1], reverse=True
+                )
+            )
+        boxes.append(
+            f'<g class="node" transform="translate({x:.0f},{y:.0f})" '
+            f'data-tip="{escape(tip, quote=True)}"><title>{escape(tip)}</title>'
+            f'<rect width="{_BOX_W}" height="{_BOX_H}" rx="5" fill="{colour}"/>'
+            f'<text x="8" y="16" class="fn">{escape(name)}</text>'
+            f'<text x="8" y="31" class="num">{escape(module)}</text>'
+            f'<text x="8" y="47" class="num">{n.total_seconds:.3f}s · '
+            f"{p.pct(n.total_seconds):.1f}% of {escape(p.scope)}</text></g>"
+        )
+        for cx in xs:
+            x1, y1 = x + _BOX_W / 2, y + _BOX_H
+            x2, y2 = cx + _BOX_W / 2, y + _BOX_H + _ROW_GAP
+            mid = (y1 + y2) / 2
+            edges.append(
+                f'<path d="M{x1:.0f},{y1:.0f} C{x1:.0f},{mid:.0f} {x2:.0f},{mid:.0f} '
+                f'{x2:.0f},{y2 - 6:.0f}" marker-end="url(#arrow)"/>'
+            )
+        return x
+
+    for root in p.tree:
+        if root.total_seconds >= cutoff:
+            place(root, 0)
+    width = max(next_col, 1) * (_BOX_W + _COL_GAP)
+    height = (depth_max + 1) * (_BOX_H + _ROW_GAP)
+    cls = "tree light" if by_where else "tree"  # dark text on the pale colours
+    return (
+        f'<svg class="{cls}" xmlns="http://www.w3.org/2000/svg" width="{width}" '
+        f'height="{height}" viewBox="-4 -4 {width + 8} {height + 8}">'
+        '<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" '
+        'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+        '<path d="M0,0 L10,5 L0,10 z" fill="#5c6a6a"/></marker></defs>'
+        f'<g class="edges">{"".join(edges)}</g>{"".join(boxes)}</svg>'
+    )
+
+
+def _tree_page_body(
+    p: Profile, s: BuildSummary, interval: float, by_where: bool = False
+) -> str:
+    if by_where:
+        legend_items = [(_WHERE_LABEL[w], c) for w, c in _WHERE_COLOUR.items()]
+        coloured = (
+            "Boxes are coloured by where the build mostly was when the function "
+            "was sampled (hover for the full split)"
+        )
+    else:
+        legend_items = [
+            *_KIND_COLOUR.items(),
+            ("other libraries (docutils, jinja2, ...)", _OTHER_COLOUR),
+        ]
+        coloured = "Boxes are coloured by where the code comes from"
+    legend = "".join(
+        f'<li><span class="swatch" style="background:{c}"></span>{escape(k)}</li>'
+        for k, c in legend_items
+    )
+    return f"""
+<p class="meta">{p.seconds:.6f}s ({s.pct(p.seconds):.2f}% of the build), estimated
+from {p.samples} stack samples (sampling interval: {interval * 1000:g} ms). Every node shows how much of the {escape(p.scope)}
+was spent in it. Branches under 1% of the {escape(p.scope)} are left out. {coloured}.
+<b>Hover a box</b> for where the function is defined (file:line) and its self time.</p>
+<p class="meta">Note: two samples can be more than {interval * 1000:g} ms apart.
+To record a sample the sampler thread needs Python's GIL, which can take up
+to 5 ms (the default GIL switch interval); and it can take longer if something
+is keeping the GIL busy.</p>
+<ul class="legend inline">{legend}</ul>
+<div class="tree-wrap">{_tree_graph_svg(p, by_where=by_where)}</div>
+<div id="tip" class="tooltip" hidden></div>"""
+
+
+# ------------------------------------------------------------- build tree --
+
+
+_NO_BUILD_TREE = """
+<h1>Call tree: (whole build)</h1>
+<p class="meta">The build was not sampled,
+so there is no call tree.</p>"""
 
 
 # ------------------------------------------------------------------- write --
@@ -541,6 +849,29 @@ def write_report(s: BuildSummary, out_dir: str, data: dict, json_path: str = "")
         with open(os.path.join(out_dir, fname), "w", encoding="utf-8") as f:
             f.write(content)
 
+    def write_profile_pages(
+        p: Profile | None, files: dict[str, str], what: str, nav: str, **tree_kwargs
+    ) -> None:
+        """Write the call tree and functions pages of ``what`` (e.g.
+        ``"event x"``), which is under ``nav`` in the nav bar, if sampled."""
+        if p is None:
+            return
+        back = (
+            f'<p class="backlink"><a href="{files["timings"]}">← {escape(what)}</a></p>'
+            if "timings" in files
+            else ""
+        )
+        bodies = {
+            "tree": ("Call tree", _tree_page_body(p, s, interval, **tree_kwargs)),
+            "functions": ("Function-wise breakdown", _profile_section(p, interval)),
+        }
+        for tab, (heading, body) in bodies.items():
+            body = (
+                f"{back}\n<h1>{heading}: {escape(p.label)}</h1>\n"
+                f"{_tabs(p, files, tab)}{_SAMPLED_WARNING_NOTE}{body}"
+            )
+            write(files[tab], _page(f"{heading}: {what}", nav, body, s, json_path))
+
     write(
         "index.html",
         _page("Overview", "index.html", _overview_body(s, links), s, json_path),
@@ -549,24 +880,53 @@ def write_report(s: BuildSummary, out_dir: str, data: dict, json_path: str = "")
         "events.html",
         _page("Events", "events.html", _events_body(s, links), s, json_path),
     )
-    write("gaps.html", _page("Gaps", "gaps.html", _gaps_body(s, links), s, json_path))
+    # locate the stack snapshots once; every profile below is built from them
+    frames = load_frames(data)
+    interval = (data.get("frames") or {}).get("sampling_interval", 0.0)
+    profiles = gap_profiles(frames, s, data)
+    combined = combined_gap_profile(profiles)
+    files = _profile_files("gaps.html")
+    body = _gaps_body(s, links, _tabs(combined, files, "timings"))
+    write("gaps.html", _page("Gaps", "gaps.html", body, s, json_path))
+    write_profile_pages(combined, files, "all gaps", "gaps.html")
+    # the whole build has no timings page: its call tree is the top-level page
+    whole = build_profile(frames, s, data)
+    files = {"tree": "build.html", "functions": "build-functions.html"}
+    write_profile_pages(whole, files, "whole build", "build.html", by_where=True)
+    if whole is None:
+        write(
+            "build.html", _page("Call tree", "build.html", _NO_BUILD_TREE, s, json_path)
+        )
     write("style.css", _STYLE)
     write("report.js", _REPORT_JS)
     # group the raw records once; each detail page then renders its own rows
     emissions = all_emission_details(data)
+    ev_profiles = event_profiles(frames, s)
     for name, fname in links.events.items():
-        body = _event_page_body(name, emissions.get(name, ()), s, links)
+        profile = ev_profiles.get(name)
+        files = _profile_files(fname)
+        tabs = _tabs(profile, files, "timings")
+        body = _event_page_body(name, emissions.get(name, ()), s, links, tabs)
         write(fname, _page(f"Event {name}", "events.html", body, s, json_path))
+        write_profile_pages(profile, files, f"event {name}", "events.html")
     calls = all_handler_call_details(data)
+    h_profiles = handler_profiles(frames, s)
     for name, fname in links.handlers.items():
-        body = _handler_page_body(name, calls.get(name, ()), s, links)
+        profile = h_profiles.get(name)
+        files = _profile_files(fname)
+        tabs = _tabs(profile, files, "timings")
+        body = _handler_page_body(name, calls.get(name, ()), s, links, tabs)
         write(fname, _page(f"Handler {name}", "events.html", body, s, json_path))
+        write_profile_pages(profile, files, f"handler {name}", "events.html")
     occurrences = all_gap_occurrence_details(data)
     for (source, target), fname in links.gap_pairs.items():
-        body = _gap_page_body(
-            source, target, occurrences.get((source, target), ()), s, links
-        )
+        profile = profiles.get((source, target))
+        files = _profile_files(fname)
+        tabs = _tabs(profile, files, "timings")
+        rows = occurrences.get((source, target), ())
+        body = _gap_page_body(source, target, rows, s, links, tabs)
         write(fname, _page(f"Gap {source} → {target}", "gaps.html", body, s, json_path))
+        write_profile_pages(profile, files, f"gap {source} → {target}", "gaps.html")
     return out_dir
 
 
@@ -601,8 +961,33 @@ th, td { padding: .35rem .6rem; border-bottom: 1px solid var(--line);
   text-align: left; }
 th { border-bottom: 2px solid var(--ink); white-space: nowrap; }
 td.num { text-align: right; font-family: var(--mono); }
+td:not(.num) { overflow-wrap: anywhere; }
 td a, h2 a, .legend a { color: var(--accent); }
 tr.total td { border-top: 2px solid var(--line); color: var(--muted); }
+h3 { font-size: 1rem; margin: 1.5rem 0 .3rem; }
+/* warning banner under the tab bar of the sampled pages */
+.banner { margin: 1rem 0; padding: .5rem .8rem; font-size: .9rem; border-radius: 4px;
+  background: #fff3cd; color: #5c4400; border: 1px solid #e6c766; }
+.banner a { color: inherit; font-weight: 600; }
+/* tab bar shared by a sampled page and its call tree page; stays in view */
+.tabs { position: sticky; top: 0; z-index: 1; display: flex; gap: .4rem;
+  padding: .5rem 0; background: var(--bg); border-bottom: 1px solid var(--line); }
+.tabs a { padding: .2rem .8rem; border: 1px solid var(--line); border-radius: 1rem;
+  background: var(--panel); color: var(--muted); font-size: .9rem; text-decoration: none; }
+.tabs a:hover { border-color: var(--accent); color: var(--accent); }
+.tabs a.current { border-color: var(--accent); background: var(--accent); color: #fff; }
+/* call tree graph */
+.tree-wrap { overflow: auto; background: var(--panel); border: 1px solid var(--line);
+  padding: 1rem; }
+svg.tree .edges path { fill: none; stroke: #5c6a6a; stroke-width: 1.2; }
+svg.tree .node text { fill: #fff; font: 12px var(--mono); pointer-events: none; }
+svg.tree .node .num, svg.tree .node .run { fill: #e8eeee; font-size: 10.5px; }
+svg.tree.light .node text, svg.tree.light .node .num { fill: var(--ink); }
+svg.tree .node:hover rect { stroke: var(--ink); stroke-width: 2; }
+.legend.inline { display: flex; gap: 1.2rem; flex-wrap: wrap; max-width: none; margin: .5rem 0 1rem; }
+.tooltip { position: fixed; z-index: 3; max-width: 40rem; padding: .5rem .7rem;
+  background: var(--ink); color: #fff; font: .78rem/1.45 var(--mono);
+  white-space: pre; border-radius: 4px; pointer-events: none; overflow: hidden; }
 tbody tr:hover { background: #f1f5f4; }
 /* click-to-sort column headings */
 table.sortable th { cursor: pointer; -webkit-user-select: none; user-select: none; }
@@ -674,6 +1059,24 @@ _REPORT_JS = """\
       });
     });
   });
+  // hover tooltip for the call tree graph nodes
+  var tip = document.getElementById("tip");
+  if (tip) {
+    document.querySelectorAll("svg.tree [data-tip]").forEach(function (node) {
+      node.addEventListener("mouseenter", function () {
+        tip.textContent = node.dataset.tip;
+        tip.hidden = false;
+      });
+      node.addEventListener("mousemove", function (ev) {
+        var x = ev.clientX + 14, y = ev.clientY + 14;
+        if (x + tip.offsetWidth > window.innerWidth) x = ev.clientX - tip.offsetWidth - 14;
+        if (y + tip.offsetHeight > window.innerHeight) y = ev.clientY - tip.offsetHeight - 14;
+        tip.style.left = x + "px";
+        tip.style.top = y + "px";
+      });
+      node.addEventListener("mouseleave", function () { tip.hidden = true; });
+    });
+  }
   var sel = document.getElementById("event-filter");
   if (sel) {
     var note = document.getElementById("filter-summary");

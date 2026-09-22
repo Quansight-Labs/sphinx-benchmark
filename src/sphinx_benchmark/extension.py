@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
+import threading
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -18,6 +20,9 @@ logger = getLogger(__name__)
 THEME_PACKAGES = {
     ep.module.split(".")[0] for ep in entry_points(group="sphinx.html_themes")
 }
+
+# Seconds the sampler sleeps between two stack samples (see :class:`StackSampler`)
+DEFAULT_SAMPLING_INTERVAL = 0.001
 
 
 @dataclass
@@ -36,7 +41,7 @@ class HandlerCall:
         Full module path (separated by '.') of where the handler function is defined.
     kind : str
         Classification of where the handler is coming from. Could be:
-        ``"extension"``, ``"sphinx-internal"``, ``"theme"``, or
+        ``"extension"``, ``"sphinx-internal"``, ``"theme"``, ``"stdlib"`` or
         ``"unknown"``.
     extension : str or None
         Origin package of the handler: extension name for
@@ -197,8 +202,8 @@ class EventLogger:
                 event=event,
                 handler=handler_name,
                 module=module,
-                kind="unknown",  # will be filled in later by classify_handler
-                extension=None,  # will be filled in later by classify_handler
+                kind="unknown",  # will be filled in later by classify_all_handlers
+                extension=None,  # will be filled in later by classify_all_handlers
                 call=self.call_counts[key],
                 start=start_offset,
                 duration=duration,
@@ -206,6 +211,8 @@ class EventLogger:
         )
 
     def enter_event(self, event_name):
+        """Start timing an emission of ``event_name``, nested inside the
+        innermost emission still in progress (if any)."""
         t0 = perf_counter()
         self.event_call_counts[event_name] += 1
         parent = self._stack[-1][0] if self._stack else None
@@ -246,34 +253,21 @@ class EventLogger:
         """
         all_hc = {}
         for hc in self.calls:
-            module = hc.module
-            top = module.split(".")[0]
-            if module not in all_hc:
-                if module.startswith("sphinx.ext."):
-                    # note, ``sphinx.ext.autodoc.typehints`` is reduced to ``sphinx.ext.autodoc``
-                    all_hc[module] = ("extension", ".".join(module.split(".")[:3]))
-                elif module == "sphinx" or module.startswith("sphinx."):
-                    all_hc[module] = ("sphinx-internal", None)
-                # Checked before extensions: most themes also register a setup(), so they
-                # appear in app.extensions and would otherwise be classified as extensions.
-                elif top in THEME_PACKAGES:
-                    all_hc[module] = ("theme", top)
-                else:
-                    all_hc[module] = ("unknown", top or None)
-                    for ext_name, ext in app.extensions.items():
-                        ext_top = ext.module.__name__.split(".")[0]
-                        if ext_top == top:
-                            all_hc[module] = ("extension", ext_name)
-                            break
-            hc.kind, hc.extension = all_hc[module]
+            if hc.module not in all_hc:
+                all_hc[hc.module] = classify_module(hc.module, app)
+            hc.kind, hc.extension = all_hc[hc.module]
 
     def write_json(
-        self, project_info, build_info, filename: str = "sphinx_benchmarks.json"
+        self,
+        project_info,
+        build_info,
+        frames,
+        filename: str = "sphinx_benchmarks.json",
     ) -> None:
         """Write all recorded handler calls to a JSON file. The default filename
         format is ``sphinx_benchmarks_YYYYMMDD-HHMMSS_[HEAD's last 7 char].json``.
 
-        The json has a four top-level keys:
+        The json has a five top-level keys:
 
         ``"project_info"`` is a dict containing project name, version, copyright,
         and git HEAD commit hash (if found).
@@ -286,21 +280,166 @@ class EventLogger:
 
         ``"events"`` is a list of the recorded :class:`Event` entries (as
         plain dicts, via :func:`dataclasses.asdict`), one per event emission.
+
+        ``"frames"`` is the stack of snapshots/samples of the whole docs build, see
+        :meth:`StackSampler.records`.
         """
-        with open(filename, "w") as f:
+        with open(filename, "w", encoding="utf-8") as f:
             json.dump(
                 {
                     "project_info": project_info,
                     "build_info": build_info,
                     "calls": [asdict(c) for c in self.calls],
                     "events": [asdict(e) for e in self.events],
+                    "frames": frames,
                 },
                 f,
                 indent=2,
             )
 
 
+def classify_module(module: str, app: Sphinx) -> tuple[str, str | None]:
+    """Return ``(kind, extension)`` for the code in ``module``.
+
+    ``kind`` is ``"extension"``, ``"sphinx-internal"``, ``"theme"``, ``"stdlib"``,
+    or ``"unknown"``; ``extension`` names the origin package (see
+    :class:`HandlerCall`).
+    """
+    top = module.split(".")[0]
+    if module.startswith("sphinx.ext."):
+        # note, ``sphinx.ext.autodoc.typehints`` is reduced to ``sphinx.ext.autodoc``
+        return "extension", ".".join(module.split(".")[:3])
+    if module == "sphinx" or module.startswith("sphinx."):
+        return "sphinx-internal", None
+    # Checked before extensions: most themes also register a setup(), so they
+    # appear in app.extensions and would otherwise be classified as extensions.
+    if top in THEME_PACKAGES:
+        return "theme", top
+    for ext_name, ext in app.extensions.items():
+        ext_top = ext.module.__name__.split(".")[0]
+        if ext_top == top:
+            return "extension", ext_name
+    if top in sys.stdlib_module_names:
+        return "stdlib", top
+    return "unknown", top or None
+
+
+class StackSampler(threading.Thread):
+    """A background daemon thread that records the docs build thread's
+    function call stack (via :func:`sys._current_frames`) every ``interval``
+    seconds.
+
+    Parameters
+    ----------
+    recorder : EventLogger
+        The `EventLogger` instance of the docs build.
+    interval : float
+        Seconds to sleep between collecting two function stack samples.
+    build_thread_id : int
+        ``threading.get_ident()`` of the thread running the docs build.
+
+    Attributes
+    ----------
+    functions : list of dict
+        One entry per distinct function seen on a sampled stack, with its
+        ``function`` name, ``module``, ``file`` and ``line`` number
+    stacks : list of tuple
+        Every distinct function call stack sampled, as a tuple of function indexes,
+        innermost function first.
+    snapshots : list of tuple
+        One ``(start_time, stack index)`` entry per sample/snapshot.
+
+    Notes
+    -----
+
+    Nothing in frames explicitly tells us if it was in an event or handler or gap.
+    That gets figured out later by comparing the snapshot times to the start times
+    and durations of the events and handler calls records.
+
+    Overheads:
+    - Each sample itself takes about a few µs, during which the build thread is paused.
+    - GIL's switch interval (`sys.getswitchinterval()` --> 5 ms): when the sampler's
+      1 ms sleep expires it has to re-acquire the GIL. If the build thread is
+      running Python code, the sampler thread waits one switch interval (5 ms)
+      and then requests the GIL, which the build thread hands over at its next
+      bytecode boundary. So samples are never closer than about 1 ms, or could
+      typically be sleep + one switch interval apart (~6 ms). But, if C code
+      is running then that can hold the GIL for longer, which can add an overhead.
+    """
+
+    def __init__(self, recorder: EventLogger, interval: float, build_thread_id: int):
+        super().__init__(name="sphinx-benchmark-sampler", daemon=True)
+        self.recorder = recorder
+        self.interval = interval
+        self.build_thread_id = build_thread_id
+        self.functions: list[dict] = []
+        self.stacks: list[tuple[int, ...]] = []
+        self.snapshots: list[tuple[float, int]] = []
+        self._function_index: dict = {}  # key: function's code object, value: index of the function
+        self._stack_index: dict[
+            tuple[int, ...], int
+        ] = {}  # key: tuple of function indexes in a function call stack, value: index of the stack
+        self._stop_event = threading.Event()  # shared flag (set to False) that this daemon thread checks every `self.interval` ms to decide whether to take another sample or exit (if the docs build thread is finished)
+
+    def run(self):
+        try:
+            while not self._stop_event.wait(
+                self.interval
+            ):  # this loop takes 1 sample/snapshot
+                frame = sys._current_frames().get(self.build_thread_id)
+                if frame is None:
+                    continue
+                t = perf_counter() - (self.recorder.start_time or 0.0)
+                stack = []
+                while frame is not None:
+                    code_obj = frame.f_code
+                    idx = self._function_index.get(code_obj)
+                    if idx is None:
+                        idx = self._function_index[code_obj] = len(self.functions)
+                        self.functions.append(
+                            {
+                                "function": code_obj.co_qualname,
+                                # compiled Jinja templates have no __name__: store the file instead
+                                "module": frame.f_globals.get("__name__")
+                                or os.path.basename(code_obj.co_filename),
+                                "file": code_obj.co_filename,
+                                "line": code_obj.co_firstlineno,
+                            }
+                        )
+                    stack.append(idx)
+                    frame = frame.f_back  # collecting the full function call stack
+                key = tuple(stack)
+                stack_id = self._stack_index.get(key)
+                if stack_id is None:
+                    stack_id = self._stack_index[key] = len(self.stacks)
+                    self.stacks.append(key)
+                self.snapshots.append((t, stack_id))
+        except Exception as e:
+            logger.warning("Benchmarking stack sampler stopped: %s", e, exc_info=True)
+
+    def stop(self):
+        """Stop sampling and wait for the thread to finish."""
+        self._stop_event.set()  # tells the daemon thread to stop sampling
+        if self.is_alive():
+            self.join()
+
+    def records(self, app: Sphinx) -> dict:
+        """Turn the snapshots into the ``"frames"`` value of the JSON."""
+        functions = []
+        for f in self.functions:
+            kind, extension = classify_module(f["module"], app)
+            functions.append({**f, "kind": kind, "extension": extension})
+        return {
+            "sampling_interval": self.interval,
+            "samples": len(self.snapshots),
+            "functions": functions,
+            "stacks": [list(s) for s in self.stacks],
+            "snapshots": [[round(t, 6), s] for t, s in self.snapshots],
+        }
+
+
 recorder = EventLogger()
+sampler: StackSampler | None = None
 
 # set as an attribute on every wrapped handler to avoid wrapping an already wrapped handler
 _WRAP_FLAG = "_event_profiler_wrapped"
@@ -351,7 +490,7 @@ def wrap_listener(event_name, listener):
     if module is None:
         try:
             file = getattr(orig_handler, "__globals__", {}).get("__file__", "")
-            module = file.split("/")[-1]  # returning file name e.g. conf.py
+            module = os.path.basename(file) or "unknown"  # file name, e.g. conf.py
         except Exception as e:
             logger.warning(
                 "Could not determine module for handler %s: %s \nSetting `module='unknown'`.",
@@ -455,6 +594,12 @@ def wrap_emit(app: Sphinx, *_args) -> None:
     app.events.emit = wrapped
 
 
+# (function, module) of the wrapper frames; summary.py uses them to find
+# where a handler's or an event emission's call tree starts in a sampled stack
+LISTENER_WRAPPER = (f"{wrap_listener.__qualname__}.<locals>.wrapped", __name__)
+EMIT_WRAPPER = (f"{wrap_emit.__qualname__}.<locals>.wrapped", __name__)
+
+
 def build_finished(app: Sphinx, exception) -> None:
     """Write the collected benchmarks and print the summary at the end of the build.
 
@@ -471,6 +616,8 @@ def build_finished(app: Sphinx, exception) -> None:
         Sphinx always passes it to ``build-finished`` handlers.
     """
     try:
+        if sampler is not None:  # None when the GIL is disabled, see setup()
+            sampler.stop()
         recorder.total_wall_time = perf_counter() - (
             recorder.start_time or perf_counter()
         )
@@ -499,15 +646,19 @@ def build_finished(app: Sphinx, exception) -> None:
             project_info["HEAD"] = out.stdout.strip()
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             # CalledProcessError : it's not a git repo; FileNotFoundError : git is not installed
-            print("no git HEAD found:", e)
+            logger.info("no git HEAD found: %s", e)
             project_info["HEAD"] = None
 
         filename = "sphinx_benchmarks_" + recorder.start_ts.strftime("%Y%m%d-%H%M%S")
         if project_info["HEAD"]:
             filename += "_" + project_info["HEAD"][:7]
         filename += ".json"
+        frames = sampler.records(app) if sampler is not None else None
         recorder.write_json(
-            project_info=project_info, build_info=build_info, filename=filename
+            project_info=project_info,
+            build_info=build_info,
+            filename=filename,
+            frames=frames,
         )
         print(f"{filename} written to {os.path.abspath(filename)}")
     except Exception as e:
@@ -516,11 +667,24 @@ def build_finished(app: Sphinx, exception) -> None:
 
 def setup(app: Sphinx):
     """Sphinx extension entry point."""
+    global sampler
     try:
         recorder.start()
         wrap_emit(app)
         wrap_all_listeners(app)
         wrap_connect(app)
+
+        if getattr(sys, "_is_gil_enabled", lambda: True)():
+            sampler = StackSampler(
+                recorder, DEFAULT_SAMPLING_INTERVAL, threading.get_ident()
+            )
+            sampler.start()
+        else:
+            sampler = None
+            logger.warning(
+                "the GIL is disabled, so the build is not sampled (no call trees); "
+                "run with PYTHON_GIL=1 to enable sampling"
+            )
 
         # the priority is set to 999  so that if any other handlers are connected
         # with the build-finished event, then those get executed first and stored in the json.
