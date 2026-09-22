@@ -13,7 +13,7 @@ from sphinx.extension import Extension
 import sphinx_benchmark.extension as bs
 from sphinx_benchmark.extension import (
     _WRAP_FLAG,
-    EventLogger,
+    Recorder,
     classify_all_handlers,
     recorder,
     wrap_all_listeners,
@@ -73,8 +73,8 @@ def fresh_recorder():
 
 @pytest.fixture
 def log():
-    """A standalone EventLogger, for tests that don't go through the wrappers."""
-    logger = EventLogger()
+    """A standalone Recorder, for tests that don't go through the wrappers."""
+    logger = Recorder()
     logger.start()
     return logger
 

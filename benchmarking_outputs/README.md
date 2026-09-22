@@ -173,7 +173,7 @@ So for every event you get the total time it took and the split across its handl
 at the moment they are registered.
 
 Each timed call becomes a `HandlerCall` record and each event emission becomes an
-`Event` record, both kept in one `EventLogger`. All times are measured from the moment
+`Event` record, both kept in one `Recorder`. All times are measured from the moment
 the extension's `setup()` ran, so everything shares a starting point.
 
 A handler can itself emit events, so a stack of the emissions in progress is kept: each

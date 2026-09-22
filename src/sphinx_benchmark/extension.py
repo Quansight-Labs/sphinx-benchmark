@@ -107,10 +107,10 @@ class Event:
     own_time: float | None = None
 
 
-class EventLogger:
+class Recorder:
     """Records per-handler timing data for a single build.
 
-    An :class:`EventLogger` instance (i.e. :data:`recorder`) accumulates
+    An :class:`Recorder` instance (i.e. :data:`recorder`) accumulates
     one :class:`HandlerCall` per wrapped-handler call and keeps all the
     records in one place.
 
@@ -335,8 +335,8 @@ class StackSampler(threading.Thread):
 
     Parameters
     ----------
-    recorder : EventLogger
-        The `EventLogger` instance of the docs build.
+    recorder : Recorder
+        The `Recorder` instance of the docs build.
     interval : float
         Seconds to sleep between collecting two function stack samples.
     build_thread_id : int
@@ -371,7 +371,7 @@ class StackSampler(threading.Thread):
       is running then that can hold the GIL for longer, which can add an overhead.
     """
 
-    def __init__(self, recorder: EventLogger, interval: float, build_thread_id: int):
+    def __init__(self, recorder: Recorder, interval: float, build_thread_id: int):
         super().__init__(name="sphinx-benchmark-sampler", daemon=True)
         self.recorder = recorder
         self.interval = interval
@@ -442,7 +442,7 @@ class StackSampler(threading.Thread):
         }
 
 
-recorder = EventLogger()
+recorder = Recorder()
 sampler: StackSampler | None = None
 
 # set as an attribute on every wrapped handler to avoid wrapping an already wrapped handler
@@ -474,7 +474,7 @@ def wrap_listener(event_name, listener):
     Notes
     -----
     The returned wrapper calls the original handler, records its
-    duration via :meth:`EventLogger.record`, and re-raises any exception
+    duration via :meth:`Recorder.record`, and re-raises any exception
     the original handler raised (timing is recorded in a ``finally`` block,
     so exceptions propagate normally and Sphinx's own error handling is unaffected).
     The wrapper's ``__name__``, ``__qualname__``, and ``__module__`` are
