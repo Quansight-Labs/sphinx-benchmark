@@ -14,11 +14,13 @@ import sphinx_benchmark.extension as bs
 from sphinx_benchmark.extension import (
     _WRAP_FLAG,
     EventLogger,
+    classify_all_handlers,
     recorder,
     wrap_all_listeners,
     wrap_connect,
     wrap_emit,
     wrap_listener,
+    write_json,
 )
 
 SLEEP = 0.5
@@ -219,7 +221,7 @@ def test_classify_all_handlers(app, log, monkeypatch):
     for module in expected:
         log.record("builder-inited", f"handler_in_{module}", module, 0.0, 0.1)
 
-    log.classify_all_handlers(app)
+    classify_all_handlers(log.calls, app)
 
     assert {c.module: (c.kind, c.extension) for c in log.calls} == expected
 
@@ -238,7 +240,7 @@ def test_write_json(log, tmp_path):
 
     frames = {"sampling_interval": 0.001, "samples": 0, "snapshots": []}
 
-    log.write_json(project_info, build_info, frames, str(out))
+    write_json(log.calls, log.events, project_info, build_info, frames, str(out))
     data = json.loads(out.read_text())
 
     assert set(data) == {"project_info", "build_info", "calls", "events", "frames"}

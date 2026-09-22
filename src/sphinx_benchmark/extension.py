@@ -108,7 +108,7 @@ class Event:
 
 
 class EventLogger:
-    """Records and reports per-handler timing data for a single build.
+    """Records per-handler timing data for a single build.
 
     An :class:`EventLogger` instance (i.e. :data:`recorder`) accumulates
     one :class:`HandlerCall` per wrapped-handler call and keeps all the
@@ -244,58 +244,62 @@ class EventLogger:
             if e.duration is not None:
                 e.own_time = e.duration - children_time[e.event_id]
 
-    def classify_all_handlers(self, app: Sphinx) -> None:
-        """Classify every recorded call and set its ``kind`` and ``extension``.
 
-        Sphinx adds an extension to `app.extensions` after its `setup()`
-        returns, so classifying at the time of wrapping reports "extension"
-        as `"unknown"`.
-        """
-        all_hc = {}
-        for hc in self.calls:
-            if hc.module not in all_hc:
-                all_hc[hc.module] = classify_module(hc.module, app)
-            hc.kind, hc.extension = all_hc[hc.module]
+def classify_all_handlers(calls: list[HandlerCall], app: Sphinx) -> None:
+    """Classify every recorded handler call in ``calls`` and set its ``kind`` and
+    ``extension``.
 
-    def write_json(
-        self,
-        project_info,
-        build_info,
-        frames,
-        filename: str = "sphinx_benchmarks.json",
-    ) -> None:
-        """Write all recorded handler calls to a JSON file. The default filename
-        format is ``sphinx_benchmarks_YYYYMMDD-HHMMSS_[HEAD's last 7 char].json``.
+    Sphinx adds an extension to `app.extensions` after its `setup()`
+    returns, so classifying at the time of wrapping reports "extension"
+    as `"unknown"`.
+    """
+    all_hc = {}
+    for hc in calls:
+        if hc.module not in all_hc:
+            all_hc[hc.module] = classify_module(hc.module, app)
+        hc.kind, hc.extension = all_hc[hc.module]
 
-        The json has a five top-level keys:
 
-        ``"project_info"`` is a dict containing project name, version, copyright,
-        and git HEAD commit hash (if found).
+def write_json(
+    calls: list[HandlerCall],
+    events: list[Event],
+    project_info,
+    build_info,
+    frames,
+    filename: str = "sphinx_benchmarks.json",
+) -> None:
+    """Write all recorded handler calls to a JSON file. The default filename
+    format is ``sphinx_benchmarks_YYYYMMDD-HHMMSS_[HEAD's last 7 char].json``.
 
-        ``"build_info"`` is a dict containing builder name, start time, and total wall time.
+    The json has a five top-level keys:
 
-        ``"calls"`` is a list of the recorded :class:`HandlerCall` entries (as
-        plain dicts, via :func:`dataclasses.asdict`), one per handler
-        function call.
+    ``"project_info"`` is a dict containing project name, version, copyright,
+    and git HEAD commit hash (if found).
 
-        ``"events"`` is a list of the recorded :class:`Event` entries (as
-        plain dicts, via :func:`dataclasses.asdict`), one per event emission.
+    ``"build_info"`` is a dict containing builder name, start time, and total wall time.
 
-        ``"frames"`` is the stack of snapshots/samples of the whole docs build, see
-        :meth:`StackSampler.records`.
-        """
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "project_info": project_info,
-                    "build_info": build_info,
-                    "calls": [asdict(c) for c in self.calls],
-                    "events": [asdict(e) for e in self.events],
-                    "frames": frames,
-                },
-                f,
-                indent=2,
-            )
+    ``"calls"`` is a list of the recorded :class:`HandlerCall` entries (as
+    plain dicts, via :func:`dataclasses.asdict`), one per handler
+    function call.
+
+    ``"events"`` is a list of the recorded :class:`Event` entries (as
+    plain dicts, via :func:`dataclasses.asdict`), one per event emission.
+
+    ``"frames"`` is the stack of snapshots/samples of the whole docs build, see
+    :meth:`StackSampler.records`.
+    """
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "project_info": project_info,
+                "build_info": build_info,
+                "calls": [asdict(c) for c in calls],
+                "events": [asdict(e) for e in events],
+                "frames": frames,
+            },
+            f,
+            indent=2,
+        )
 
 
 def classify_module(module: str, app: Sphinx) -> tuple[str, str | None]:
@@ -622,7 +626,7 @@ def build_finished(app: Sphinx, exception) -> None:
             recorder.start_time or perf_counter()
         )
         recorder.compute_own_times()
-        recorder.classify_all_handlers(app)
+        classify_all_handlers(recorder.calls, app)
 
         cfg = app.config
         project_info = {
@@ -654,7 +658,9 @@ def build_finished(app: Sphinx, exception) -> None:
             filename += "_" + project_info["HEAD"][:7]
         filename += ".json"
         frames = sampler.records(app) if sampler is not None else None
-        recorder.write_json(
+        write_json(
+            recorder.calls,
+            recorder.events,
             project_info=project_info,
             build_info=build_info,
             filename=filename,
