@@ -348,6 +348,23 @@ class StackSampler(threading.Thread):
         innermost function first.
     snapshots : list of tuple
         One ``(start_time, stack index)`` entry per sample/snapshot.
+
+    Notes
+    -----
+
+    Nothing in frames explicitly tells us if it was in an event or handler or gap.
+    That gets figured out later by comparing the snapshot times to the start times
+    and durations of the events and handler calls records.
+
+    Overheads:
+    - Each sample itself takes about a few µs, during which the build thread is paused.
+    - GIL's switch interval (`sys.getswitchinterval()` --> 5 ms): when the sampler's
+      1 ms sleep expires it has to re-acquire the GIL. If the build thread is
+      running Python code, the sampler thread waits one switch interval (5 ms)
+      and then requests the GIL, which the build thread hands over at its next
+      bytecode boundary. So samples are never closer than about 1 ms, or could
+      typically be sleep + one switch interval apart (~6 ms). But, if C code
+      is running then that can hold the GIL for longer, which can add an overhead.
     """
 
     def __init__(self, recorder: EventLogger, interval: float, build_thread_id: int):
@@ -407,56 +424,7 @@ class StackSampler(threading.Thread):
             self.join()
 
     def records(self, app: Sphinx) -> dict:
-        """Turn the snapshots into the ``"frames"`` value of the JSON.
-
-        Frames are collected and stored as follows:
-
-        - `sampling_interval`: the interval in seconds between two samples
-        - `samples`: the total number of samples/snapshots collected
-        - `functions`: one entry per distinct function ever seen in any snapshot, with
-          its function name, module, file, line, kind and extension. Its position in
-          this list is its function index.
-        - `stacks`: one entry per distinct stack of functions ever seen. Each is a
-          list of function indexes, innermost function first i.e. index 0 is the function
-          running, the last one is the outermost function. stack generated using `frame.f_back`.
-        - `snapshots`: one entry per sample: [seconds since build start, stack index].
-
-        Examples
-        --------
-
-        ```
-        "sampling_interval": 0.001,
-        "samples": 3,
-        "functions": [
-            {"function": "main",         "module": "sphinx.cmd.build", ...},
-            {"function": "Sphinx.build", "module": "sphinx.application", ...},
-            {"function": "parse",        "module": "docutils.parsers.rst", ...}
-        ],
-        "stacks":    [[2, 1, 0], [1, 0]],
-        "snapshots": [[0.0012, 0], [0.0021, 0], [0.0033, 1]]
-        ```
-
-        Read it as: the first two samples/snapshots saw that the docs build thread
-        was running inside `parse` function, which was called by `Sphinx.build`,
-        which was called by `main`. The third sample saw build inside `Sphinx.build`.
-
-        Notes
-        -----
-
-        Nothing in frames explicitly tells us if it was in an event or handler or gap.
-        That gets figured out later by comparing the snapshot times to the start times
-        and durations of the events and handler calls records.
-
-        Overheads:
-        - Each sample itself takes about a few µs, during which the build thread is paused.
-        - GIL's switch interval (`sys.getswitchinterval()` --> 5 ms): when the sampler's
-          1 ms sleep expires it has to re-acquire the GIL. If the build thread is
-          running Python code, the sampler thread waits one switch interval (5 ms)
-          and then requests the GIL, which the build thread hands over at its next
-          bytecode boundary. So samples are never closer than about 1 ms, or could
-          typically be sleep + one switch interval apart (~6 ms). But, if C code
-          is running then that can hold the GIL for longer, which can add an overhead.
-        """
+        """Turn the snapshots into the ``"frames"`` value of the JSON."""
         functions = []
         for f in self.functions:
             kind, extension = classify_module(f["module"], app)

@@ -1,6 +1,8 @@
 # sphinx-benchmark
 
-This is a Sphinx extension that benchmarks and profiles a docs build process [event](https://www.sphinx-doc.org/en/master/extdev/event_callbacks.html)-wise(handler-wise), and the gaps in between the events-- so you can tell which extension, theme, or part of Sphinx itself is slowing your builds. Note, that this extension is still in its early stages of development--so it might change a lot and there might be a lot of bugs in it right now. So don't use it in production yet!
+This is a Sphinx extension that benchmarks and profiles a docs build process [event](https://www.sphinx-doc.org/en/master/extdev/event_callbacks.html)-wise, handler-wise, and gaps-wise (i.e. gaps in between the events). This extension also provides estimated function-wise breakdown table and function call trees for the whole docs build, individual event, handler and gap. By using this extension one can investigate which function, extension, theme, or part of Sphinx itself is slowing the docs builds.
+
+**Note** : This extension is still in its early stages of development-- so it will change a lot and there might be a lot of bugs in it right now. So don't use it in production yet!
 
 ## Usage
 
@@ -33,8 +35,20 @@ This is a Sphinx extension that benchmarks and profiles a docs build process [ev
    The build generates a `sphinx_benchmarks_<date>-<build's start time>_<HEAD commit's last 7 chars>.json` in the present working
    directory (e.g. `sphinx_benchmarks_20260907-143012_306917b.json`).
 
-4. Change the directory to the build directory (where the generated `sphinx_benchmarks_*.json` is present) and run
-   the following. It picks the most recent `sphinx_benchmarks_*.json`, or pass a specific one with `--input`:
+4. [Recommended format - HTML] Change the directory to the build directory (where the generated `sphinx_benchmarks_*.json` is present) and run
+   the following to generate the benchmarks report in html format by running:
+
+   ```bash
+   sphinx-benchmark run html
+   ```
+
+   Then a `sphinx_benchmark_report` folder will be created in your build directory. Open the `index.html` present inside
+   `sphinx_benchmark_report` in your browser to see the overview and events, handlers and gaps breakdown.
+
+   You can also specify the output directory for where you want the `sphinx_benchmark_report` folder to get created, 
+   using `--output-dir` option. Or specify a different json file using the `--input` option.
+
+5. To see the benchmarks in the terminal, run:
 
    ```bash
    sphinx-benchmark run
@@ -69,7 +83,9 @@ This is a Sphinx extension that benchmarks and profiles a docs build process [ev
    ```
 
    Use `--top` to change how many rows are shown, e.g. `sphinx-benchmark run --top 20`.
-
+   It picks the most recent `sphinx_benchmarks_*.json`, or you can also pass a specific .json 
+   by using the `--input` option.
+ 
    For the full tables (the per-event handler tables plus the gaps summary), run
    `sphinx-benchmark run table`; it also accepts a selector for more focused views:
 
@@ -79,86 +95,57 @@ This is a Sphinx extension that benchmarks and profiles a docs build process [ev
    sphinx-benchmark run table events <handler-name>       # every call of that handler from any event
    sphinx-benchmark run table events <event-name> <handler-name>    # that handler's calls during that event emission only
    sphinx-benchmark run table gaps                        # the gaps summary table, then function-wise breakdown of where the time of all gaps goes (based on sampling)
-   sphinx-benchmark run table gaps <start-event> <end-event>  # details of every individual gap between those two events, then where that gap's time goes
+   sphinx-benchmark run table gaps <start-event> <end-event>  # details of every individual gap between those two events, then function-wise breakdown of where the time of all gaps with give start and end event goes (based on sampling)
    ```
 
    You can find the benchmarking outputs for different Scientific Python projects in the 
-   [benchmarking_outputs](./benchmarking_outputs/) directory. For what the output actually mean,
-   see [the benchmarking_outputs README](./benchmarking_outputs/README.md).
-
-5. If you want to see the benchmarks summary in html format, run:
-
-   ```bash
-   sphinx-benchmark run html
-   ```
-
-   Then a `sphinx_benchmark_report` folder will be created in your build directory. Open the `index.html` present inside
-   `sphinx_benchmark_report` in your browser to see the overview and events, handlers and gaps breakdown.
-   Each event's, handler's and gap's page also has tabs to where the time inside it went (per
-   function) and to its call tree drawn as a graph (caller at the top, arrows to what it
-   called, each box with its share); hover a box for the file and line where the function is defined.
-   The **Whole build** page draws the call tree of the whole build, each box coloured by where the build was: inside a
-   handler, inside an event but outside its handlers, or in a gap between events.
-   You can also specify the output directory for where you want the `sphinx_benchmark_report` folder to get created, using `--output-dir` option. Or specify a different json file using the `--input` option.
-
-## How are benchmarks calculated?
-
-Nearly everything an extension does in Sphinx goes through `app.events.emit()`.
-Sphinx calls it at certain points in the build process, and it runs all the
-registered handler for that event. This extension wraps and puts timers around this path.
-
-`wrap_emit()` wraps `app.events.emit` that times the whole emission, and
-`wrap_listener()` swaps each handler for a wrapped and timed copy of it.
-So for every event you get the total time it took and the split across its handlers.
-A stack is maintained to keep track of nested event, and the child event's time is
-later subtracted so it isn't counted twice. `wrap_all_listeners()` wraps everything
-already registered when the extension loads, and `wrap_connect()` wraps
-`app.events.connect` so handlers and events registered later, also get wrapped as they are called.
-
-Each timed call becomes a `HandlerCall` record and each event emission becomes an
-`Event` record, both kept in one `EventLogger`. All times are measured from the moment
-the extension started, so everything shares a starting point.
-
-The timers only see events and handlers, so they can't tell which functions the time inside
-an event, a handler or a gap went to. For that, `setup()` also starts a background daemon thread
-(`StackSampler`). It sleeps for 1 ms (the sampling interval), then reads the docs build thread's current
-function call stack with `sys._current_frames()`, walks it with `frame.f_back` from the running function up to
-the outermost one, and stores it along with the time since the build started. To take a sample the thread needs
-the GIL, which the build thread hands over at its next I/O call or after Python's GIL switch interval
-(5 ms by default), so two samples can be more than 1 ms apart. The samples go into the JSON as `frames`.
-
-When a report is made, every sample is placed, by its time, in the innermost thing the build was in at that
-moment: a handler call, an event emission (outside its handlers) or a gap between two top-level emissions.
-The samples of one event, handler or gap are then merged into a call tree, where stacks that start with the same
-functions share those nodes. Each sample is worth `measured time / number of samples` of that event, handler or
-gap, so a call tree always adds up to the measured time. A function's self time comes from the samples in which it
-was the one running (time in the Python standard library is counted towards its caller), and its total time also
-includes everything it called. These numbers are estimates, not measured times.
-
-At `build-finished` (at priority 999, so other extensions' handlers gets executed first)
-the extension works out each event's own time, classify every handler with where it came from,
-and dumps everything into a JSON.
+   [benchmarking_outputs](./benchmarking_outputs/) directory. For more on how to read benchmarking
+   output/report and how benchmarks are calculated see [the benchmarking_outputs README](./benchmarking_outputs/README.md).
 
 
-## Limitations of this extension - WIP
+## Limitations/pain points
 
-- No parallel builds: The recorder lives in the main process only, so
-`parallel_read_safe` and `parallel_write_safe` are both `False`. Sphinx will fall back to a
-serial build even if you pass `-j auto`, which means the wall-clock total won't match what
-you'd normally see, when you are building with parallelism.
-- The `build-finished` emission has `duration=None`. The handler that writes the JSON runs
-inside that emission, so the emission hasn't ended yet when it's serialised. It's stored
-with `duration=None` and the summary skips it. Anything after it, like `builder.cleanup()`
-isn't measured at all.
-- The startup blind spot: Timing begins at the extension's `setup()`. The "startup, before first emission" row in the gaps table covers only what happened after that point.
+### Major ones
+
+Wherever necessary, appropriate warning messages regarding the following are printed:
+
+- No parallel builds: 
+   - The recorder lives in the main process only, so `parallel_read_safe` and `parallel_write_safe`
+     are both `False`. Sphinx will fall back to a serial build even if you pass `-j auto`, which
+     means the wall-clock total won't match what you'd normally see, when you are building with parallelism.
+   - Also sampling is done by a background daemon thread and if the docs build thread and the sampler
+     daemon thread will run in parallel then we might end up with incorrect function stacks.
 - The function-wise breakdowns (gaps, events, handlers, whole build) are estimated from samples, not measured: a function seen in only a few samples is noise, so short gaps and handlers/events could be unreliable, and anything that holds the GIL in C code is accounted to the Python function that called it.
-- No sampling (and therefore function-wise breakdown and call-tree) without the GIL: the sampler reads the build thread's frames while holding the GIL, which is only safe because the build thread is paused meanwhile. On a free-threaded Python with the GIL disabled the sampler is not started (the JSON has `"frames": null`, so no call trees); run with `PYTHON_GIL=1` to get these.
+- Sampling (and therefore function-wise breakdown tables and call-tree) only works with GIL enabled: 
+the sampler thread reads the docs build thread's function frames while holding the GIL, which is 
+only safe because the build thread is paused meanwhile. On a free-threaded Python with the GIL
+disabled the sampler is not started (the JSON has `"frames": null`, so no call trees) because otherwise
+we might record incorrect function stacks and therefore generate incorrect benchmarking report; 
+run with `PYTHON_GIL=1` to ensure that the sampling is done.
+
+### Other minor limitations
+
+- the extension itself also adds a little bit of overhead to the build process. 
+- Wall clock time is not CPU time: caches, background processes, and network fetches all are included in the total time. Run benchmarks more than once before concluding anything.
 - Some handlers can't be classified: Handlers defined in `conf.py`, or in a package that
 doesn't match anything in `app.extensions`, are classified as `unknown` and reported by
 module or file name. Partials and callable objects have no `__qualname__`, so they're
 labelled by whatever name could be recovered.
-- the extension itself also adds a little bit of overhead to the build process.
-- Wall clock time is not CPU time: caches, background processes, and network fetches all are included in the total time. Run benchmarks more than once before concluding anything.
+- the benchmarks .json can sometimes be too big (depends on the number of samples collected)
+- The `build-finished` emission has `duration=None`. The handler that writes the JSON runs
+inside that emission, so the emission hasn't ended yet when it's serialised. It's stored
+with `duration=None` and the summary skips it. Anything after it, like `builder.cleanup()`
+isn't measured-- but it is usually just a few seonds at the end.
+- The startup blind spot: Timing begins at the extension's `setup()`. The "startup, before first emission" row in the gaps table covers only what happened after that point. The startup time is usually just a few seconds.
+
+---
+
+Feel free to contribute to sphinx-benchmark-- open issues for any problems you face, or any
+feedback you'd like to give, or for new features you'd like to see implemented. And if you'd
+like to open a pull request, we'd be happy to review it.
+
+All code in this repository is available under the Berkeley Software Distribution (BSD) 3-Clause License.
+(see [LICENSE](LICENSE))
 
 
 Thank you for stopping by :)

@@ -616,7 +616,7 @@ _SAMPLED_WARNING_NOTE = """
 <div class="banner"><b>Warning:</b> This call trees and function-wise breakdown tables are estimated from function
 call stacks that a background daemon thread sampled while the docs were being built;
 these are not the exact times measured by wrapping any Sphinx objects. For more information, see
-<a href="https://github.com/Schefflera-Arboricola/sphinx-benchmark#how-are-benchmarks-calculated">How
+<a href="https://github.com/Schefflera-Arboricola/sphinx-benchmark/tree/main/benchmarking_outputs/README.md#how-are-benchmarks-calculated">How
 are benchmarks calculated?</a></div>"""
 
 
