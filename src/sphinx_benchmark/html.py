@@ -329,6 +329,9 @@ def _overview_body(s: BuildSummary, links: _Links) -> str:
  · Builder: <b>{escape(str(b.get("builder", "-")))}</b>
  · Started: {escape(str(b.get("start_time", "-")))}</p>"""
     body = f"""
+<div class="banner"><b>WARNING:</b> sphinx-benchmark is not parallel-read or
+parallel-write safe, so it forces a serial build. These numbers do not
+reflect any speed-up from any parallelism in your regular docs build.</div>
 <h1>Where the build time went</h1>{info}
 <div class="stats">
   <div><b>{s.total_build_time:.3f}s</b> wall clock</div>
