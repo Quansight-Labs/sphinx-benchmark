@@ -113,8 +113,8 @@ This is a Sphinx extension that benchmarks and profiles a docs build process [ev
    ```
 
    You can find the benchmarking outputs for different Scientific Python projects in the 
-   [benchmarking_outputs](./benchmarking_outputs/) directory. For more on how to read benchmarking
-   output/report and how benchmarks are calculated see [the benchmarking_outputs README](./benchmarking_outputs/README.md).
+   [benchmarking_outputs](https://github.com/Schefflera-Arboricola/sphinx-benchmark/blob/main/benchmarking_outputs/) directory. For more on how to read benchmarking
+   output/report and how benchmarks are calculated see [the benchmarking_outputs README](https://github.com/Schefflera-Arboricola/sphinx-benchmark/blob/main/benchmarking_outputs/README.md).
 
 
 ## Limitations/pain points
@@ -159,7 +159,7 @@ feedback you'd like to give, or for new features you'd like to see implemented. 
 like to open a pull request, we'd be happy to review it.
 
 All code in this repository is available under the Berkeley Software Distribution (BSD) 3-Clause License.
-(see [LICENSE](LICENSE))
+(see [LICENSE](https://github.com/Schefflera-Arboricola/sphinx-benchmark/blob/main/LICENSE))
 
 
 Thank you for stopping by :)
