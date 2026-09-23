@@ -21,7 +21,8 @@ THEME_PACKAGES = {
     ep.module.split(".")[0] for ep in entry_points(group="sphinx.html_themes")
 }
 
-# Seconds the sampler sleeps between two stack samples (see :class:`StackSampler`)
+# Seconds the sampler sleeps between two stack samples (see :class:`StackSampler`);
+# the default of the ``sphinx_benchmark_sampling_interval`` config value
 DEFAULT_SAMPLING_INTERVAL = 0.001
 
 
@@ -363,7 +364,7 @@ class StackSampler(threading.Thread):
     Overheads:
     - Each sample itself takes about a few µs, during which the build thread is paused.
     - GIL's switch interval (`sys.getswitchinterval()` --> 5 ms): when the sampler's
-      1 ms sleep expires it has to re-acquire the GIL. If the build thread is
+      sleep (1 ms by default) expires it has to re-acquire the GIL. If the build thread is
       running Python code, the sampler thread waits one switch interval (5 ms)
       and then requests the GIL, which the build thread hands over at its next
       bytecode boundary. So samples are never closer than about 1 ms, or could
@@ -675,6 +676,12 @@ def setup(app: Sphinx):
     """Sphinx extension entry point."""
     global sampler
     try:
+        app.add_config_value(
+            "sphinx_benchmark_sampling_interval",
+            DEFAULT_SAMPLING_INTERVAL,
+            "",
+            types=frozenset({float, int}),
+        )
         recorder.start()
         wrap_emit(app)
         wrap_all_listeners(app)
@@ -682,7 +689,9 @@ def setup(app: Sphinx):
 
         if getattr(sys, "_is_gil_enabled", lambda: True)():
             sampler = StackSampler(
-                recorder, DEFAULT_SAMPLING_INTERVAL, threading.get_ident()
+                recorder,
+                app.config.sphinx_benchmark_sampling_interval,
+                threading.get_ident(),
             )
             sampler.start()
         else:

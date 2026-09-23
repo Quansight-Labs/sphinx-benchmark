@@ -198,7 +198,8 @@ into the JSON.
 
 The timers only see events and handlers, so they can't tell which functions the time inside
 an event, a handler or a gap went to. For that, `setup()` also starts a background daemon thread
-(`StackSampler`). It sleeps for 1 ms (the sampling interval), then reads the docs build thread's current
+(`StackSampler`). It sleeps for the sampling interval (`sphinx_benchmark_sampling_interval` in `conf.py`,
+1 ms by default), then reads the docs build thread's current
 function call stack with `sys._current_frames()`, walks it with `frame.f_back` from the running function up to
 the outermost one, and stores it along with the time since the build started. To take a sample the thread needs
 the GIL, which the build thread hands over at its next I/O call or after Python's GIL switch interval

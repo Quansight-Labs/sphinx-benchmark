@@ -52,6 +52,11 @@ class DummyApp:
     def __init__(self):
         self.events = DummyEventManager(self)
         self.extensions: dict[str, Extension] = {}
+        self.config = types.SimpleNamespace()  # values "from conf.py" are set here
+
+    def add_config_value(self, name, default, rebuild, types=()):
+        if not hasattr(self.config, name):
+            setattr(self.config, name, default)
 
     def add_extension(self, name: str) -> None:
         self.extensions[name] = Extension(name, types.ModuleType(name))
@@ -433,12 +438,23 @@ def test_setup_starts_the_sampler_only_with_the_gil(app, monkeypatch):
     bs.setup(app)
     try:
         assert bs.sampler is not None and bs.sampler.is_alive()
+        assert bs.sampler.interval == bs.DEFAULT_SAMPLING_INTERVAL
     finally:
         bs.sampler.stop()
 
     monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False, raising=False)
     bs.setup(app)
     assert bs.sampler is None
+
+
+def test_sampling_interval_from_conf(app, monkeypatch):
+    monkeypatch.setattr(bs, "sampler", None)
+    app.config.sphinx_benchmark_sampling_interval = 0.005
+    bs.setup(app)
+    try:
+        assert bs.sampler.interval == 0.005
+    finally:
+        bs.sampler.stop()
 
 
 def test_build_finished_without_a_sampler_still_writes_the_json(monkeypatch, tmp_path):

@@ -334,6 +334,9 @@ class BuildSummary:
     build_info : dict
         The ``build_info`` dict from the JSON (builder, start_time,
         total_wall_time); empty if missing.
+    sampling_interval : float or None
+        The stack sampler's interval in seconds (``frames.sampling_interval``
+        in the JSON); None if the build recorded no frames.
     """
 
     time_in_events: float
@@ -344,6 +347,7 @@ class BuildSummary:
     overlaps: int
     project_info: dict = field(default_factory=dict)
     build_info: dict = field(default_factory=dict)
+    sampling_interval: float | None = None
 
     @property
     def total_build_time(self) -> float:
@@ -401,6 +405,7 @@ def compute_summary(data: dict) -> BuildSummary:
     time_in_events = sum(own_totals.values())
     project_info = data.get("project_info") or {}
     build_info = data.get("build_info") or {}
+    sampling_interval = (data.get("frames") or {}).get("sampling_interval")
     total_build_time = build_info.get("total_wall_time") or time_in_events or 1.0
 
     by_event: dict[str, list[HandlerRow]] = defaultdict(list)
@@ -471,6 +476,7 @@ def compute_summary(data: dict) -> BuildSummary:
         overlaps=overlaps,
         project_info=project_info,
         build_info=build_info,
+        sampling_interval=sampling_interval,
     )
 
 

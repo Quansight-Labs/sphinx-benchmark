@@ -268,7 +268,10 @@ def test_run_table_and_html(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "builder-inited" in out and "Gaps Summary" in out
     assert "Project: proj 1.0  |  HEAD: abc123" in out
-    assert "Builder: html  |  Started: 2026-01-01 00:00:00 UTC" in out
+    assert (
+        "Builder: html  |  Started: 2026-01-01 00:00:00 UTC  |  Sampling interval: 1 ms"
+        in out
+    )
     assert "Someone" not in out  # copyright is not printed
 
     report = tmp_path / "report"
