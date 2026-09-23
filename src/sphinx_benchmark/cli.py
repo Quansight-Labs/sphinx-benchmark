@@ -6,6 +6,7 @@ import glob
 import os
 import sys
 
+from . import __version__
 from .html import write_report
 from .summary import (
     BenchmarkFileError,
@@ -58,7 +59,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "written by the sphinx-benchmark extension during a Sphinx build."
         ),
     )
-    parser.add_argument("--version", action="version", version="%(prog)s 0.1.0")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser(
