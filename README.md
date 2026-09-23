@@ -66,31 +66,34 @@ This is a Sphinx extension that benchmarks and profiles a docs build process [ev
    ```
 
    This prints the top 10 events and gaps that take up the most of the build time,
-   sorted by % of build descending. Following is the output for the matplotlib's docs build:
+   sorted by % of build descending. Following is the output for the numpy's docs build:
    
    ```bash
    % sphinx-benchmark run         
 
-   Build time: 855.269954s   Inside events: 493.623291s (57.72%)   Outside events (gaps): 361.646663s (42.28%)
-   ===========================================================================================================
-   Top 10 of 75 events and gaps, by % of build
-   ===========================================================================================================
-   Name                                                              Type        Time(s)     Count   % build
-   -----------------------------------------------------------------------------------------------------------
-   builder-inited                                                   event     421.705558         1    49.31%
-   html-page-context -> doctree-resolved                              gap     115.324759      1745    13.48%
-   source-read -> doctree-read                                        gap      65.246262       981     7.63%
-   object-description-transform -> doctree-read                       gap      48.713614      1065     5.70%
-   doctree-resolved -> html-page-context                              gap      33.772388      2081     3.95%
-   object-description-transform -> object-description-transform       gap      21.183541      5853     2.48%
-   autodoc-process-docstring                                        event      21.149022      8350     2.47%
-   html-page-context -> missing-reference                             gap      19.954656       335     2.33%
-   doctree-read                                                     event      16.198356      2081     1.89%
-   autodoc-process-signature                                        event      15.622995      8258     1.83%
-   -----------------------------------------------------------------------------------------------------------
-   events total                                                               474.675931              55.50%
-   gaps total                                                                 304.195220              35.57%
-   (65 more rows; use --top N to show more)
+   Project: NumPy 2.6.dev0  |  HEAD: e29186cf91a8d314002a4085ae7e3c2fe6b4cc6e
+   Builder: html  |  Started: 2026-09-23 11:25:09 UTC  |  Sampling interval: 5 ms
+   
+   Build time: 355.869547s   Inside events: 56.104345s (15.77%)   Outside events (gaps): 299.765201s (84.23%)
+   ========================================================================================================
+   Top 10 of 70 events and gaps, by % of build
+   ========================================================================================================
+     Name                                                           Type        Time(s)     Count   % build
+   --------------------------------------------------------------------------------------------------------
+     html-page-context -> doctree-resolved                           gap     121.891773      2290    34.25%
+     autodoc-process-docstring -> object-description-transform       gap      51.052618      2217    14.35%
+     doctree-resolved -> html-page-context                           gap      40.945038      2676    11.51%
+     html-page-context -> missing-reference                          gap      15.707065       385     4.41%
+     autodoc-process-docstring                                     event      15.010674      4251     4.22%
+     builder-inited                                                event      13.336338         1     3.75%
+     object-description-transform -> doctree-read                    gap      12.621546      2215     3.55%
+     autodoc-process-signature                                     event      11.431854      4639     3.21%
+     (finish, after last emission)                                   gap      11.065856               3.11%
+     source-read -> doctree-read                                     gap      10.347389       268     2.91%
+   --------------------------------------------------------------------------------------------------------
+     events total                                                             39.778866              11.18%
+     gaps total                                                              263.631286              74.08%
+     (60 more rows; use --top N to show more)
    ```
 
    Use `--top` to change how many rows are shown, e.g. `sphinx-benchmark run --top 20`.
