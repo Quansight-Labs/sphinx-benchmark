@@ -11,7 +11,7 @@ This directory contains the benchmarking results for some of the Scientific Pyth
 - Gaps page contains the gaps summary table (Table 2 below); click a gap (event pair) to see all of its individual gap records. The same two "Call tree" and "Function-wise breakdown" tabs are there for each gap pair, and on the Gaps page itself for all gaps together.
 - Whole build page contains the call tree of the whole build, each box coloured by where the build was: inside a handler, inside an event but outside its handlers, or in a gap between emissions. Its "Function-wise breakdown" tab lists the same per function.
 
-In every call tree, branches under 1% of the tree's total are left out, and the function-wise tables only list functions with a total time of at least 0.5%. Hover a box (or a function name in the table) to see where the function is defined (file:line). Every table can be re-sorted by clicking a column heading. The call trees and function-wise breakdowns are estimated from stack samples, not measured (see [Sampling](#sampling-call-trees-and-function-wise-breakdown)), and are absent if the build wasn't sampled, like if GIL was disabled.
+In every call tree, branches under 1% of the tree's total are left out, and the function-wise tables only list functions with a total time of at least 0.5%. Hover a box (or a function name in the table) to see where the function is defined (file:line). Every table can be re-sorted by clicking a column heading. The call trees and function-wise breakdowns are estimated from stack samples, not measured (see [Sampling](#sampling-call-trees-and-function-wise-breakdown)), and are absent if the build wasn't sampled, like if GIL was disabled or if `disable_sampling = True`.
 
 ## CLI benchmarking outputs
 
@@ -112,7 +112,7 @@ Every build with this extension enabled creates a `sphinx_benchmarks_*.json` fil
 - `build_info` : `builder` (e.g. `html`), `start_time` (UTC) and `total_wall_time`, the whole build time from the extension's setup to `build-finished`
 - `events` : one record per event emission: `event_id`, `event_name`, `call` (1 for the first emission of this event, 2 for the second, and so on), `start` (seconds since build start), `depth`, `duration` (including nested emissions; `null` for `build-finished`), `parent_id` (the `event_id` this one is nested inside, or `null`) and `own_time` (`duration` minus the nested emissions)
 - `calls` : one record per handler call: `event`, `handler` (its qualified name), `module`, `kind`, `extension`, `call`, `start` and `duration`
-- `frames` : stack snapshots of the whole build (what was running, and when), from which the call trees and function-wise breakdowns are built (`null` if the build wasn't sampled)
+- `frames` : stack snapshots of the whole build (what was running, and when), from which the call trees and function-wise breakdowns are built (`null` if the build wasn't sampled, e.g. `disable_sampling = True` in `conf.py` or GIL was disabled)
 
 ### frames
 

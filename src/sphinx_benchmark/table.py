@@ -34,7 +34,9 @@ def print_build_info(s: BuildSummary) -> None:
         f"HEAD: {p.get('HEAD') or '-'}"
     )
     line = f"Builder: {b.get('builder', '-')}  |  Started: {b.get('start_time', '-')}"
-    if s.sampling_interval is not None:
+    if s.sampling_interval is None:
+        line += "  |  Sampling: off"
+    else:
         line += f"  |  Sampling interval: {s.sampling_interval * 1000:g} ms"
     print(line)
 

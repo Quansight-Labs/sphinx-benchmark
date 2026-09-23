@@ -1,3 +1,4 @@
+```bash
 Project: NumPy 2.6.dev0  |  HEAD: e29186cf91a8d314002a4085ae7e3c2fe6b4cc6e
 Builder: html  |  Started: 2026-09-23 11:25:09 UTC  |  Sampling interval: 5 ms
 
@@ -339,3 +340,4 @@ Gaps Summary
   (finish, after last emission)                                                                                11.065856                           3.11%
 --------------------------------------------------------------------------------------------------------------------------------------------------------
   (total outside events)                                                                                      299.765201                          84.23%
+```
