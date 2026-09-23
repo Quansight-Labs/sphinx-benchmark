@@ -59,7 +59,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "written by the sphinx-benchmark extension during a Sphinx build."
         ),
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser(
