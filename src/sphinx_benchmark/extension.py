@@ -682,12 +682,15 @@ def setup(app: Sphinx):
             "",
             types=frozenset({float, int}),
         )
+        app.add_config_value("disable_sampling", False, "", types=frozenset({bool}))
         recorder.start()
         wrap_emit(app)
         wrap_all_listeners(app)
         wrap_connect(app)
 
-        if getattr(sys, "_is_gil_enabled", lambda: True)():
+        if app.config.disable_sampling:
+            sampler = None
+        elif getattr(sys, "_is_gil_enabled", lambda: True)():
             sampler = StackSampler(
                 recorder,
                 app.config.sphinx_benchmark_sampling_interval,

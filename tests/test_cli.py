@@ -286,6 +286,23 @@ def test_run_table_and_html(tmp_path, capsys):
     assert '<span class="project">proj 1.0</span>' in (report / "gaps.html").read_text(
         encoding="utf-8"
     )
+    assert "Sampling interval: <b>1 ms</b>" in index
+
+
+def test_reports_say_sampling_was_off(tmp_path, capsys):
+    """Without frames (``disable_sampling = True``) both reports say so."""
+    json_path = tmp_path / "sphinx_benchmarks.json"
+    json_path.write_text(json.dumps({**SAMPLE, "frames": None}))
+
+    assert main(["run", "table", "-i", str(json_path)]) == 0
+    out = capsys.readouterr().out
+    assert "Builder: html  |  Started: 2026-01-01 00:00:00 UTC  |  Sampling: off" in out
+
+    report = tmp_path / "report"
+    assert main(["run", "html", "-i", str(json_path), "-o", str(report)]) == 0
+    index = (report / "index.html").read_text(encoding="utf-8")
+    assert "Sampling: <b>off</b>" in index
+    assert "Sampling interval" not in index
 
 
 def test_run_default_overview(tmp_path, capsys):

@@ -457,6 +457,13 @@ def test_sampling_interval_from_conf(app, monkeypatch):
         bs.sampler.stop()
 
 
+def test_disable_sampling_from_conf(app, monkeypatch):
+    monkeypatch.setattr(bs, "sampler", None)
+    app.config.disable_sampling = True
+    bs.setup(app)
+    assert bs.sampler is None
+
+
 def test_build_finished_without_a_sampler_still_writes_the_json(monkeypatch, tmp_path):
     """With the GIL disabled there is no sampler; the timings must still be written."""
     monkeypatch.setattr(bs, "sampler", None)

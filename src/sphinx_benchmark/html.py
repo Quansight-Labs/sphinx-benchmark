@@ -323,11 +323,17 @@ def _overview_body(s: BuildSummary, links: _Links) -> str:
     p, b = s.project_info, s.build_info
     info = ""
     if p or b:
+        sampling = (
+            "Sampling: <b>off</b>"
+            if s.sampling_interval is None
+            else f"Sampling interval: <b>{s.sampling_interval * 1000:g} ms</b>"
+        )
         info = f"""
 <p class="meta">Project: <b>{escape(str(p.get("name", "-")))} {escape(str(p.get("version", "")))}</b>
  · HEAD: <code>{escape(str(p.get("HEAD") or "-"))}</code>
  · Builder: <b>{escape(str(b.get("builder", "-")))}</b>
- · Started: {escape(str(b.get("start_time", "-")))}</p>"""
+ · Started: {escape(str(b.get("start_time", "-")))}
+ · {sampling}</p>"""
     body = f"""
 <div class="banner"><b>WARNING:</b> sphinx-benchmark is not parallel-read or
 parallel-write safe, so it forces a serial build. These numbers do not
