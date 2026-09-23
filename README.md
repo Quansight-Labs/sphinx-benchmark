@@ -26,6 +26,13 @@ This is a Sphinx extension that benchmarks and profiles a docs build process [ev
 
    Put it first in the list as it minimizes (but doesn't eliminate) the untracked starting time.
 
+   Optionally, you can set how often (in seconds) the docs build's function call stack is sampled for the
+   function-wise breakdowns and call trees (default: `0.001`):
+
+   ```python
+   sphinx_benchmark_sampling_interval = 0.005
+   ```
+
 3. Then build your docs as usual:
 
    ```bash

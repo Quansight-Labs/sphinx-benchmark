@@ -33,7 +33,10 @@ def print_build_info(s: BuildSummary) -> None:
         f"Project: {p.get('name', '-')} {p.get('version', '')}  |  "
         f"HEAD: {p.get('HEAD') or '-'}"
     )
-    print(f"Builder: {b.get('builder', '-')}  |  Started: {b.get('start_time', '-')}")
+    line = f"Builder: {b.get('builder', '-')}  |  Started: {b.get('start_time', '-')}"
+    if s.sampling_interval is not None:
+        line += f"  |  Sampling interval: {s.sampling_interval * 1000:g} ms"
+    print(line)
 
 
 def print_summary(s: BuildSummary) -> None:
